@@ -1,13 +1,20 @@
 """Core tools for the Kimi Workspace app.
 
-The public API in ``web_tools`` is patched at package import time with a
-multi-provider recent-news pipeline. Conversational prompts are reduced to
-their actual topic, Google/Bing/DDGS/GDELT are tried with strict freshness
-filtering, and aggregator links are resolved to publisher article pages before
-the results are passed to the model.
+The public API in ``web_tools`` is patched at package import time with:
+
+- an isolated local Playwright browser for rendered public pages and explicit
+  ``/browser`` commands;
+- a multi-provider recent-news pipeline;
+- publisher-link resolution and full-article extraction where possible.
 """
 
 from . import web_tools as _web_tools
+from .browser_agent import install_browser_patches
+
+# Install the browser reader before importing article/news modules so their
+# local ``fetch_public_page`` references inherit the Playwright fallback.
+install_browser_patches(_web_tools)
+
 from .article_resolver import enrich_news_sources
 from .news_resilient import search_news_resilient as _provider_news_search
 
