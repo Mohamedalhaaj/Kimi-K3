@@ -1,74 +1,85 @@
+from __future__ import annotations
+
 import base64
-import io
-import ipaddress
+import json
 import os
 import re
-import socket
+import time
+from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import streamlit as st
-from ddgs import DDGS
 from dotenv import load_dotenv
 from openai import OpenAI
-from PIL import Image, ImageOps, UnidentifiedImageError
+
+from core.calculator import calculate
+from core.export_tools import (
+    answer_to_docx,
+    conversation_to_json,
+    conversation_to_markdown,
+)
+from core.file_tools import ParsedUpload, build_attachment_context, parse_upload
+from core.web_tools import ToolResult, browse_web, should_browse
 
 
 APP_DIR = Path(__file__).resolve().parent
-MODEL = "moonshotai/kimi-k3-free"
-MAX_HISTORY_MESSAGES = 24
-MAX_IMAGE_EDGE = 2048
-MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024
-MAX_WEB_CONTEXT_CHARS = 24_000
-MAX_URLS_PER_MESSAGE = 3
-
-URL_PATTERN = re.compile(r"https?://[^\s<>\"]+", re.IGNORECASE)
-AUTO_BROWSE_TERMS = (
-    "search",
-    "browse",
-    "look up",
-    "find online",
-    "open this",
-    "open the link",
-    "latest",
-    "today",
-    "current",
-    "recent",
-    "news",
-    "verify",
-    "source",
-    "ابحث",
-    "تصفح",
-    "افتح",
-    "الرابط",
-    "آخر",
-    "أحدث",
-    "اليوم",
-    "حالي",
-    "أخبار",
-    "تحقق",
-    "مصدر",
-)
-
-
-def get_api_key() -> str | None:
-    """Load the API key locally from .env or from Streamlit Cloud secrets."""
-    load_dotenv(APP_DIR / ".env")
-
-    key = os.getenv("TOKENROUTER_API_KEY")
-    if key:
-        return key
-
-    try:
-        secret_key = st.secrets.get("TOKENROUTER_API_KEY")
-        return str(secret_key) if secret_key else None
-    except Exception:
-        return None
+DEFAULT_MODEL = "moonshotai/kimi-k3-free"
+SUPPORTED_FILE_TYPES = [
+    "jpg",
+    "jpeg",
+    "png",
+    "webp",
+    "pdf",
+    "docx",
+    "pptx",
+    "txt",
+    "md",
+    "markdown",
+    "csv",
+    "xlsx",
+    "xlsm",
+    "json",
+    "py",
+    "js",
+    "ts",
+    "tsx",
+    "jsx",
+    "html",
+    "css",
+    "xml",
+    "yaml",
+    "yml",
+    "srt",
+    "vtt",
+    "log",
+]
+MODE_SETTINGS = {
+    "Fast": {
+        "history": 8,
+        "max_tokens": 850,
+        "max_web_context": 18_000,
+        "label": "Lowest latency",
+    },
+    "Balanced": {
+        "history": 16,
+        "max_tokens": 1_500,
+        "max_web_context": 32_000,
+        "label": "Best default",
+    },
+    "Deep": {
+        "history": 24,
+        "max_tokens": 2_500,
+        "max_web_context": 55_000,
+        "label": "More research, slower",
+    },
+}
+CALC_PATTERN = re.compile(r"^\s*/(?:calc|calculate)\s+(.+)$", re.IGNORECASE | re.DOTALL)
 
 
 st.set_page_config(
-    page_title="Kimi Chat",
+    page_title="Kimi Workspace",
     page_icon="🌙",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -77,7 +88,10 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-        :root { --kimi-blue: #0171DD; }
+        :root {
+            --brand: #0171DD;
+            --surface-border: rgba(128, 128, 128, .15);
+        }
 
         header[data-testid="stHeader"],
         [data-testid="stToolbar"],
@@ -91,73 +105,107 @@ st.markdown(
 
         .stApp {
             background:
-                radial-gradient(circle at 8% 0%, rgba(1,113,221,.08), transparent 30rem),
-                radial-gradient(circle at 92% 100%, rgba(1,113,221,.06), transparent 28rem);
+                radial-gradient(circle at 5% -5%, rgba(1,113,221,.09), transparent 31rem),
+                radial-gradient(circle at 100% 100%, rgba(1,113,221,.06), transparent 30rem);
         }
 
         .block-container {
-            max-width: 1040px;
-            padding-top: 3.4rem !important;
-            padding-bottom: 7.5rem !important;
+            max-width: 1080px;
+            padding-top: 2.8rem !important;
+            padding-bottom: 8rem !important;
         }
 
-        section[data-testid="stSidebar"] > div { padding-top: 2rem; }
+        section[data-testid="stSidebar"] > div {
+            padding-top: 1.65rem;
+        }
 
-        .kimi-header {
+        .workspace-header {
             display: flex;
             align-items: center;
             gap: .9rem;
-            margin: .25rem 0 1.5rem;
+            margin: .35rem 0 1.35rem;
         }
 
-        .kimi-mark {
-            min-width: 46px;
-            width: 46px;
-            height: 46px;
-            border-radius: 15px;
+        .workspace-logo {
+            min-width: 48px;
+            width: 48px;
+            height: 48px;
             display: grid;
             place-items: center;
-            background: var(--kimi-blue);
+            border-radius: 16px;
+            background: var(--brand);
             color: white;
+            font-weight: 780;
             font-size: 1.35rem;
-            font-weight: 700;
-            box-shadow: 0 12px 32px rgba(1,113,221,.22);
+            box-shadow: 0 14px 34px rgba(1,113,221,.23);
         }
 
-        .kimi-title {
-            margin: 0;
+        .workspace-title {
             font-size: 1.85rem;
-            line-height: 1.15;
-            font-weight: 760;
+            font-weight: 770;
+            line-height: 1.12;
+            margin: 0;
         }
 
-        .kimi-subtitle {
+        .workspace-subtitle {
+            opacity: .61;
             margin-top: .28rem;
-            opacity: .62;
             font-size: .94rem;
         }
 
         [data-testid="stChatMessage"] {
-            border: 1px solid rgba(128,128,128,.14);
-            border-radius: 18px;
-            padding: .3rem .45rem;
-            box-shadow: 0 7px 24px rgba(0,0,0,.035);
+            border: 1px solid var(--surface-border);
+            border-radius: 19px;
+            padding: .35rem .5rem;
+            box-shadow: 0 8px 28px rgba(0,0,0,.032);
         }
 
-        [data-testid="stChatInput"] { border-radius: 18px; }
+        [data-testid="stChatInput"] {
+            border-radius: 19px;
+        }
 
         div.stButton > button,
-        div.stDownloadButton > button { border-radius: 12px; }
+        div.stDownloadButton > button {
+            border-radius: 12px;
+        }
+
+        .capability-card {
+            border: 1px solid var(--surface-border);
+            border-radius: 16px;
+            padding: 1rem 1.05rem;
+            min-height: 115px;
+            background: rgba(255,255,255,.34);
+        }
+
+        .capability-title {
+            font-weight: 700;
+            margin-bottom: .35rem;
+        }
+
+        .capability-copy {
+            opacity: .68;
+            font-size: .9rem;
+            line-height: 1.45;
+        }
+
+        .attachment-chip {
+            display: inline-block;
+            border: 1px solid var(--surface-border);
+            border-radius: 999px;
+            padding: .25rem .58rem;
+            margin: 0 .3rem .32rem 0;
+            font-size: .78rem;
+            opacity: .78;
+        }
 
         @media (max-width: 768px) {
             .block-container {
-                padding-top: 1.6rem !important;
-                padding-left: 1rem !important;
-                padding-right: 1rem !important;
+                padding-top: 1.3rem !important;
+                padding-left: .85rem !important;
+                padding-right: .85rem !important;
             }
-
-            .kimi-title { font-size: 1.55rem; }
-            .kimi-subtitle { font-size: .84rem; }
+            .workspace-title { font-size: 1.5rem; }
+            .workspace-subtitle { font-size: .82rem; }
         }
     </style>
     """,
@@ -165,356 +213,268 @@ st.markdown(
 )
 
 
-def initialize_state() -> None:
-    if "chat_messages" not in st.session_state:
-        st.session_state.chat_messages = []
-
-    if "system_prompt" not in st.session_state:
-        st.session_state.system_prompt = (
-            "You are Kimi, a precise and helpful AI assistant. "
-            "Answer in the same language as the user unless asked otherwise. "
-            "When web context is supplied, ground factual claims in it and cite "
-            "the numbered sources using [1], [2], and so on. Never invent sources."
-        )
-
-    if "web_mode" not in st.session_state:
-        st.session_state.web_mode = "Automatic"
-
-    if "browse_depth" not in st.session_state:
-        st.session_state.browse_depth = "Fast"
-
-
-def encode_uploaded_image(uploaded_file: Any) -> dict[str, str]:
-    """Normalize, resize, and encode an uploaded image for the model."""
-    raw = uploaded_file.getvalue()
-
+def get_secret(name: str) -> str | None:
+    load_dotenv(APP_DIR / ".env")
+    value = os.getenv(name)
+    if value:
+        return value
     try:
-        image = Image.open(io.BytesIO(raw))
-        image = ImageOps.exif_transpose(image)
-        image.thumbnail((MAX_IMAGE_EDGE, MAX_IMAGE_EDGE), Image.Resampling.LANCZOS)
-    except (UnidentifiedImageError, OSError) as exc:
-        raise ValueError(f"{uploaded_file.name} is not a readable image.") from exc
+        secret = st.secrets.get(name)
+        return str(secret) if secret else None
+    except Exception:
+        return None
 
-    output = io.BytesIO()
-    has_transparency = image.mode in {"RGBA", "LA"} or (
-        image.mode == "P" and "transparency" in image.info
+
+@st.cache_resource(show_spinner=False)
+def create_client(api_key: str) -> OpenAI:
+    return OpenAI(
+        base_url="https://api.tokenrouter.com/v1",
+        api_key=api_key,
+        timeout=180.0,
+        max_retries=1,
     )
 
-    if has_transparency:
-        image = image.convert("RGBA")
-        image.save(output, format="PNG", optimize=True)
-        mime_type = "image/png"
-    else:
-        image = image.convert("RGB")
-        image.save(output, format="JPEG", quality=88, optimize=True)
-        mime_type = "image/jpeg"
 
-    processed = output.getvalue()
-    encoded = base64.b64encode(processed).decode("utf-8")
+def initialize_state() -> None:
+    defaults: dict[str, Any] = {
+        "messages": [],
+        "system_prompt": (
+            "You are Kimi Workspace, a precise, practical AI assistant. Answer in "
+            "the same language as the user unless asked otherwise. You may receive "
+            "results from web, file, image, and calculator tools. Use those results "
+            "directly instead of claiming you cannot access them. Cite web sources "
+            "with [1], [2], etc. Never invent sources. Distinguish clearly between "
+            "what is verified, inferred, and unavailable. You can search and read "
+            "public web pages, but you cannot sign in, enter credentials or PINs, "
+            "solve CAPTCHAs, or control the user's personal browser."
+        ),
+        "model_id": DEFAULT_MODEL,
+        "mode": "Fast",
+        "web_mode": "Automatic",
+        "browse_depth": "Fast",
+        "web_results": 5,
+        "show_tool_details": True,
+        "pending_prompt": "",
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def safe_attachment_dict(upload: ParsedUpload) -> dict[str, Any]:
     return {
-        "name": uploaded_file.name,
-        "mime_type": mime_type,
-        "base64": encoded,
-        "data_url": f"data:{mime_type};base64,{encoded}",
-        "byte_size": str(len(processed)),
+        "name": upload.name,
+        "kind": upload.kind,
+        "summary": upload.summary,
+        "image_base64": upload.image_base64,
+        "image_data_url": upload.image_data_url,
+        "mime_type": upload.mime_type,
+        "size_bytes": upload.size_bytes,
     }
 
 
-def extract_urls(text: str) -> list[str]:
-    urls: list[str] = []
-
-    for match in URL_PATTERN.findall(text):
-        cleaned = match.rstrip(".,;:!?)]}'\"")
-        if cleaned and cleaned not in urls:
-            urls.append(cleaned)
-
-    return urls[:MAX_URLS_PER_MESSAGE]
-
-
-def is_public_web_url(url: str) -> bool:
-    """Reject local/private network targets before opening a user-supplied URL."""
-    try:
-        parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            return False
-
-        hostname = parsed.hostname.lower()
-        if hostname in {"localhost", "localhost.localdomain"}:
-            return False
-
-        addresses = socket.getaddrinfo(hostname, None)
-        if not addresses:
-            return False
-
-        for address in addresses:
-            ip_text = address[4][0]
-            ip = ipaddress.ip_address(ip_text)
-            if (
-                ip.is_private
-                or ip.is_loopback
-                or ip.is_link_local
-                or ip.is_multicast
-                or ip.is_reserved
-                or ip.is_unspecified
-            ):
-                return False
-
-        return True
-    except (OSError, ValueError):
-        return False
-
-
-def should_browse(text: str, mode: str) -> bool:
-    if mode == "Off":
-        return False
-
-    if mode == "Always":
-        return True
-
-    if extract_urls(text):
-        return True
-
-    lowered = text.casefold()
-    return any(term in lowered for term in AUTO_BROWSE_TERMS)
-
-
-def safe_title(value: Any, fallback: str) -> str:
-    title = str(value or "").strip()
-    return title[:180] if title else fallback
-
-
-def open_web_page(ddgs: DDGS, url: str) -> tuple[str, str | None]:
-    if not is_public_web_url(url):
-        return "", "The URL is not a permitted public web address."
-
-    try:
-        result = ddgs.extract(url, fmt="text_markdown")
-        content = str(result.get("content", "")).strip()
-        if not content:
-            return "", "The page returned no readable text."
-        return content[:12_000], None
-    except Exception as error:
-        return "", f"Could not open the page: {error}"
-
-
-def browse_web(
-    query: str,
-    mode: str,
-    depth: str,
-) -> tuple[str, list[dict[str, str]], list[str]]:
-    """Search the web and/or open links, returning model context and sources."""
-    if not should_browse(query, mode):
-        return "", [], []
-
-    urls = extract_urls(query)
-    sources: list[dict[str, str]] = []
-    context_sections: list[str] = []
-    warnings: list[str] = []
-
-    try:
-        ddgs = DDGS(timeout=10)
-
-        for url in urls:
-            content, warning = open_web_page(ddgs, url)
-            source_number = len(sources) + 1
-            parsed = urlparse(url)
-            title = parsed.netloc or url
-            sources.append(
-                {
-                    "title": title,
-                    "url": url,
-                    "snippet": "Direct link supplied by the user.",
-                }
-            )
-
-            if content:
-                context_sections.append(
-                    f"[{source_number}] {title}\nURL: {url}\n"
-                    f"PAGE CONTENT:\n{content}"
-                )
-            elif warning:
-                warnings.append(f"{url}: {warning}")
-
-        clean_query = URL_PATTERN.sub(" ", query)
-        clean_query = re.sub(r"\s+", " ", clean_query).strip()
-
-        explicit_search_intent = any(
-            term in query.casefold() for term in AUTO_BROWSE_TERMS
-        )
-        run_search = (
-            not urls
-            or mode == "Always"
-            or (explicit_search_intent and len(clean_query) >= 3)
-        )
-
-        if run_search:
-            search_query = clean_query or query
-            results = ddgs.text(
-                search_query,
-                region="us-en",
-                safesearch="moderate",
-                max_results=5,
-                backend="auto",
-            )
-
-            for result in results or []:
-                url = str(result.get("href") or result.get("url") or "").strip()
-                if not url or any(source["url"] == url for source in sources):
-                    continue
-
-                title = safe_title(result.get("title"), urlparse(url).netloc)
-                snippet = str(result.get("body") or result.get("snippet") or "").strip()
-                source_number = len(sources) + 1
-
-                source = {
-                    "title": title,
-                    "url": url,
-                    "snippet": snippet[:700],
-                }
-                sources.append(source)
-
-                section = (
-                    f"[{source_number}] {title}\nURL: {url}\n"
-                    f"SEARCH SNIPPET:\n{snippet[:1_500]}"
-                )
-
-                if depth == "Deep" and source_number <= 3:
-                    page_content, warning = open_web_page(ddgs, url)
-                    if page_content:
-                        section += f"\nPAGE CONTENT:\n{page_content}"
-                    elif warning:
-                        warnings.append(f"{url}: {warning}")
-
-                context_sections.append(section)
-
-                if len(sources) >= 7:
-                    break
-
-    except Exception as error:
-        warnings.append(f"Web browsing failed: {error}")
-
-    web_context = "\n\n---\n\n".join(context_sections)
-    web_context = web_context[:MAX_WEB_CONTEXT_CHARS]
-
-    if web_context:
-        web_context = (
-            "WEB CONTEXT\n"
-            "Use only the following numbered sources for web-grounded claims. "
-            "Cite them inline as [1], [2], etc. If the sources do not answer the "
-            "question, say so explicitly.\n\n"
-            f"{web_context}"
-        )
-
-    return web_context, sources, warnings
-
-
-def api_message_from_ui_message(message: dict[str, Any]) -> dict[str, Any]:
-    if message["role"] == "assistant":
-        return {"role": "assistant", "content": message["text"]}
-
-    images = message.get("images", [])
-    text = message.get("text", "").strip()
-    web_context = message.get("web_context", "").strip()
-
-    combined_text = text
-    if web_context:
-        combined_text = f"{text}\n\n{web_context}".strip()
-
-    if not images:
-        return {"role": "user", "content": combined_text}
-
-    content: list[dict[str, Any]] = [
-        {
-            "type": "image_url",
-            "image_url": {"url": image["data_url"]},
-        }
-        for image in images
-    ]
-    content.append(
-        {
-            "type": "text",
-            "text": combined_text
-            or "Describe and analyze the uploaded image or images.",
-        }
-    )
-
-    return {"role": "user", "content": content}
-
-
-def build_api_messages() -> list[dict[str, Any]]:
-    recent_messages = st.session_state.chat_messages[-MAX_HISTORY_MESSAGES:]
-    return [
-        {"role": "system", "content": st.session_state.system_prompt},
-        *[api_message_from_ui_message(message) for message in recent_messages],
-    ]
-
-
-def render_images(images: list[dict[str, str]]) -> None:
-    if not images:
+def render_attachments(attachments: list[dict[str, Any]]) -> None:
+    if not attachments:
         return
 
-    columns = st.columns(min(len(images), 3))
-    for index, image in enumerate(images):
-        image_bytes = base64.b64decode(image["base64"])
-        with columns[index % len(columns)]:
-            st.image(
-                image_bytes,
-                caption=image["name"],
-                use_container_width=True,
-            )
+    image_attachments = [item for item in attachments if item.get("kind") == "image"]
+    other_attachments = [item for item in attachments if item.get("kind") != "image"]
+
+    if image_attachments:
+        columns = st.columns(min(len(image_attachments), 3))
+        for index, item in enumerate(image_attachments):
+            image_bytes = base64.b64decode(item["image_base64"])
+            with columns[index % len(columns)]:
+                st.image(
+                    image_bytes,
+                    caption=item.get("name", "Image"),
+                    use_container_width=True,
+                )
+
+    if other_attachments:
+        chips = "".join(
+            f'<span class="attachment-chip">📎 {item.get("name", "file")}</span>'
+            for item in other_attachments
+        )
+        st.markdown(chips, unsafe_allow_html=True)
 
 
 def render_sources(
-    sources: list[dict[str, str]],
+    sources: list[dict[str, Any]],
     warnings: list[str] | None = None,
 ) -> None:
     if not sources and not warnings:
         return
 
-    with st.expander(
-        f"Web sources ({len(sources)})",
-        expanded=False,
-    ):
+    with st.expander(f"Sources and browser details ({len(sources)})", expanded=False):
         for index, source in enumerate(sources, start=1):
-            st.markdown(f"**[{index}] [{source['title']}]({source['url']})**")
+            title = source.get("title") or source.get("url") or "Source"
+            url = source.get("url", "")
+            st.markdown(f"**[{index}] [{title}]({url})**")
             if source.get("snippet"):
                 st.caption(source["snippet"])
-
         for warning in warnings or []:
             st.warning(warning)
 
 
-def conversation_markdown() -> str:
-    lines = ["# Kimi conversation", ""]
-    for message in st.session_state.chat_messages:
-        speaker = "You" if message["role"] == "user" else "Kimi"
-        lines.append(f"## {speaker}")
+def render_tool_events(events: list[str]) -> None:
+    if not events or not st.session_state.show_tool_details:
+        return
+    with st.expander("Tool activity", expanded=False):
+        for event in events:
+            st.markdown(f"- {event}")
 
-        for image in message.get("images", []):
-            lines.append(f"*Attached image: {image['name']}*")
 
-        lines.append(message.get("text", ""))
+def user_content_for_api(
+    message: dict[str, Any],
+    include_images: bool,
+) -> str | list[dict[str, Any]]:
+    text_parts = [message.get("text", "").strip()]
+    if message.get("attachment_context"):
+        text_parts.append(message["attachment_context"])
+    if message.get("tool_context"):
+        text_parts.append(message["tool_context"])
+    combined_text = "\n\n".join(part for part in text_parts if part).strip()
 
-        for index, source in enumerate(message.get("web_sources", []), start=1):
-            lines.append(f"[{index}] {source['title']}: {source['url']}")
+    images = [
+        item
+        for item in message.get("attachments", [])
+        if item.get("kind") == "image" and item.get("image_data_url")
+    ]
+    if not include_images or not images:
+        return combined_text or "[No text was supplied.]"
 
-        lines.append("")
+    content: list[dict[str, Any]] = [
+        {
+            "type": "image_url",
+            "image_url": {"url": item["image_data_url"]},
+        }
+        for item in images
+    ]
+    content.append(
+        {
+            "type": "text",
+            "text": combined_text or "Analyze the attached image or images.",
+        }
+    )
+    return content
 
-    return "\n".join(lines)
+
+def build_api_messages() -> list[dict[str, Any]]:
+    config = MODE_SETTINGS[st.session_state.mode]
+    history = st.session_state.messages[-config["history"] :]
+    now = datetime.now().astimezone()
+    system = (
+        f"{st.session_state.system_prompt}\n\n"
+        f"Current date and time: {now.isoformat(timespec='minutes')}.\n"
+        f"Response mode: {st.session_state.mode}."
+    )
+    api_messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
+
+    last_user_indexes = [
+        index for index, message in enumerate(history) if message.get("role") == "user"
+    ][-2:]
+
+    for index, message in enumerate(history):
+        role = message.get("role")
+        if role == "assistant":
+            api_messages.append({"role": "assistant", "content": message.get("text", "")})
+        elif role == "user":
+            api_messages.append(
+                {
+                    "role": "user",
+                    "content": user_content_for_api(
+                        message,
+                        include_images=index in last_user_indexes,
+                    ),
+                }
+            )
+    return api_messages
+
+
+def parse_uploaded_files(files: list[Any]) -> tuple[list[ParsedUpload], list[str]]:
+    parsed: list[ParsedUpload] = []
+    warnings: list[str] = []
+    for uploaded_file in files:
+        try:
+            parsed.append(parse_upload(uploaded_file))
+        except Exception as exc:
+            warnings.append(f"{uploaded_file.name}: {exc}")
+    return parsed, warnings
+
+
+def run_tools(user_text: str) -> ToolResult:
+    result = ToolResult()
+
+    calculation_match = CALC_PATTERN.match(user_text)
+    if calculation_match:
+        expression = calculation_match.group(1)
+        try:
+            value = calculate(expression)
+            result.context = (
+                "CALCULATOR TOOL RESULT\n"
+                f"Expression: {expression}\nResult: {value}"
+            )
+            result.events.append(f"Calculated: {expression} = {value}")
+        except Exception as exc:
+            result.warnings.append(f"Calculator error: {exc}")
+        return result
+
+    config = MODE_SETTINGS[st.session_state.mode]
+    depth = "Deep" if st.session_state.mode == "Deep" else st.session_state.browse_depth
+
+    if should_browse(user_text, st.session_state.web_mode):
+        return browse_web(
+            query=user_text,
+            mode=st.session_state.web_mode,
+            depth=depth,
+            max_results=st.session_state.web_results,
+            max_context_chars=config["max_web_context"],
+        )
+    return result
+
+
+def source_dicts(result: ToolResult) -> list[dict[str, Any]]:
+    return [asdict(source) for source in result.sources]
+
+
+def import_conversation(uploaded_json: Any) -> None:
+    value = json.loads(uploaded_json.getvalue().decode("utf-8"))
+    messages = value.get("messages") if isinstance(value, dict) else None
+    if not isinstance(messages, list):
+        raise ValueError("The JSON file does not contain a messages list.")
+
+    imported: list[dict[str, Any]] = []
+    for item in messages:
+        if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
+            continue
+        imported.append(
+            {
+                "role": item["role"],
+                "text": str(item.get("text", "")),
+                "attachments": item.get("attachments", []),
+                "sources": item.get("sources", []),
+                "created_at": item.get("created_at") or utc_now(),
+            }
+        )
+    st.session_state.messages = imported
 
 
 initialize_state()
-API_KEY = get_api_key()
+api_key = get_secret("TOKENROUTER_API_KEY")
 
 st.markdown(
     """
-    <div class="kimi-header">
-        <div class="kimi-mark">K</div>
+    <div class="workspace-header">
+        <div class="workspace-logo">K</div>
         <div>
-            <div class="kimi-title">Kimi Chat</div>
-            <div class="kimi-subtitle">
-                Text, image and web analysis through TokenRouter
+            <div class="workspace-title">Kimi Workspace</div>
+            <div class="workspace-subtitle">
+                Chat, web research, link reading, documents, spreadsheets and images
             </div>
         </div>
     </div>
@@ -522,198 +482,277 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-if not API_KEY:
+if not api_key:
     st.error(
-        "TOKENROUTER_API_KEY was not found. For local use, keep it in .env. "
-        "For Streamlit Community Cloud, add it under App settings → Secrets."
+        "TOKENROUTER_API_KEY was not found. Add it to `.env` locally or to "
+        "Streamlit App settings → Secrets."
     )
     st.code('TOKENROUTER_API_KEY = "sk-..."', language="toml")
     st.stop()
 
-client = OpenAI(
-    base_url="https://api.tokenrouter.com/v1",
-    api_key=API_KEY,
-    timeout=180.0,
-)
+client = create_client(api_key)
 
 with st.sidebar:
-    st.subheader("Chat controls")
-
+    st.subheader("Workspace")
     if st.button("＋ New chat", use_container_width=True):
-        st.session_state.chat_messages = []
+        st.session_state.messages = []
         st.rerun()
 
-    st.text_area(
-        "Assistant instructions",
-        key="system_prompt",
-        height=125,
-        help="These instructions apply to the whole conversation.",
+    st.selectbox(
+        "Response mode",
+        options=list(MODE_SETTINGS),
+        key="mode",
+        format_func=lambda value: f"{value} — {MODE_SETTINGS[value]['label']}",
+    )
+
+    st.text_input(
+        "TokenRouter model ID",
+        key="model_id",
+        help="Use any model ID available in your TokenRouter account.",
     )
 
     st.divider()
-    st.subheader("Web browsing")
-
+    st.subheader("Tools")
     st.selectbox(
-        "Web mode",
+        "Web browsing",
         options=["Automatic", "Always", "Off"],
         key="web_mode",
-        help=(
-            "Automatic opens pasted links and searches for requests involving "
-            "current information. Always searches every message."
-        ),
+        help="Automatic searches for current-information requests and opens pasted links.",
     )
-
     st.radio(
         "Browse depth",
         options=["Fast", "Deep"],
         key="browse_depth",
         horizontal=True,
-        help=(
-            "Fast uses search snippets and opens pasted links. "
-            "Deep also opens the first search results and is slower."
-        ),
+        disabled=st.session_state.mode == "Deep",
+    )
+    st.slider("Search results", min_value=3, max_value=8, key="web_results")
+    st.toggle("Show tool details", key="show_tool_details")
+    st.caption(
+        "The browser can search and read public pages. It does not log in, type PINs, "
+        "submit forms, or control your personal browser."
     )
 
-    st.caption("Paste a public URL into the chat and Kimi will read it.")
-    st.caption(f"Model: `{MODEL}`")
-    st.caption("Images are resized locally before being sent.")
-
-    st.download_button(
-        "Download conversation",
-        data=conversation_markdown(),
-        file_name="kimi-conversation.md",
-        mime="text/markdown",
-        use_container_width=True,
-        disabled=not st.session_state.chat_messages,
-    )
-
-for message in st.session_state.chat_messages:
-    avatar = "🧑" if message["role"] == "user" else "🌙"
-    with st.chat_message(message["role"], avatar=avatar):
-        render_images(message.get("images", []))
-        if message.get("text"):
-            st.markdown(message["text"])
-        render_sources(
-            message.get("web_sources", []),
-            message.get("web_warnings", []),
+    st.divider()
+    with st.expander("Assistant instructions", expanded=False):
+        st.text_area(
+            "System prompt",
+            key="system_prompt",
+            height=220,
+            label_visibility="collapsed",
         )
 
-if not st.session_state.chat_messages:
+    with st.expander("Import or export", expanded=False):
+        imported_file = st.file_uploader(
+            "Import conversation JSON",
+            type=["json"],
+            accept_multiple_files=False,
+        )
+        if imported_file and st.button("Import conversation", use_container_width=True):
+            try:
+                import_conversation(imported_file)
+                st.success("Conversation imported.")
+                st.rerun()
+            except Exception as exc:
+                st.error(str(exc))
+
+        markdown_export = conversation_to_markdown(st.session_state.messages)
+        json_export = conversation_to_json(st.session_state.messages)
+        st.download_button(
+            "Download Markdown",
+            markdown_export,
+            file_name="kimi-conversation.md",
+            mime="text/markdown",
+            use_container_width=True,
+            disabled=not st.session_state.messages,
+        )
+        st.download_button(
+            "Download JSON",
+            json_export,
+            file_name="kimi-conversation.json",
+            mime="application/json",
+            use_container_width=True,
+            disabled=not st.session_state.messages,
+        )
+
+for message in st.session_state.messages:
+    avatar = "🧑" if message.get("role") == "user" else "🌙"
+    with st.chat_message(message.get("role", "assistant"), avatar=avatar):
+        render_attachments(message.get("attachments", []))
+        if message.get("text"):
+            st.markdown(message["text"])
+        render_tool_events(message.get("tool_events", []))
+        render_sources(message.get("sources", []), message.get("warnings", []))
+
+if not st.session_state.messages:
     st.info(
-        "Ask a question, paste a link, search the web, or attach images using "
-        "the + button inside the message box."
+        "Ask a question, paste a public link, attach files, or use `/calc 25*4`. "
+        "Web browsing runs automatically when the request needs current information."
     )
+    columns = st.columns(3)
+    cards = [
+        (
+            "🌐 Web research",
+            "Search recent information, open public links and return cited sources.",
+        ),
+        (
+            "📄 File analysis",
+            "Read PDF, Word, PowerPoint, text, CSV and Excel files in the chat box.",
+        ),
+        (
+            "🖼️ Image understanding",
+            "Attach one or more images and ask for analysis, extraction or comparison.",
+        ),
+    ]
+    for column, (title, copy) in zip(columns, cards):
+        with column:
+            st.markdown(
+                f'<div class="capability-card"><div class="capability-title">{title}</div>'
+                f'<div class="capability-copy">{copy}</div></div>',
+                unsafe_allow_html=True,
+            )
 
 submission = st.chat_input(
-    "Message Kimi, paste a link, or attach images…",
+    "Message Kimi, paste a link, or attach files…",
     accept_file="multiple",
-    file_type=["jpg", "jpeg", "png", "webp"],
-    max_upload_size=15,
+    file_type=SUPPORTED_FILE_TYPES,
+    max_upload_size=25,
     submit_mode="disable",
 )
 
-if submission:
-    user_text = submission.text.strip()
-    uploaded_files = list(submission.files)
+pending_prompt = st.session_state.pop("pending_prompt", "")
+if submission or pending_prompt:
+    user_text = pending_prompt or submission.text.strip()
+    uploaded_files = [] if pending_prompt else list(submission.files)
 
     if not user_text and not uploaded_files:
         st.stop()
 
-    processed_images: list[dict[str, str]] = []
-    total_processed_bytes = 0
+    parsed_uploads: list[ParsedUpload] = []
+    file_warnings: list[str] = []
+    if uploaded_files:
+        with st.status("Reading attachments…", expanded=False) as status:
+            parsed_uploads, file_warnings = parse_uploaded_files(uploaded_files)
+            status.update(
+                label=f"Read {len(parsed_uploads)} attachment(s)",
+                state="complete" if parsed_uploads else "error",
+            )
 
-    try:
-        for uploaded_file in uploaded_files:
-            image = encode_uploaded_image(uploaded_file)
-            total_processed_bytes += int(image["byte_size"])
-            if total_processed_bytes > MAX_TOTAL_IMAGE_BYTES:
-                raise ValueError(
-                    "The processed images are too large together. "
-                    "Please send fewer images."
-                )
-            processed_images.append(image)
-    except ValueError as error:
-        st.error(str(error))
-        st.stop()
+    attachments = [safe_attachment_dict(upload) for upload in parsed_uploads]
+    attachment_context = build_attachment_context(parsed_uploads)
 
     with st.chat_message("user", avatar="🧑"):
-        render_images(processed_images)
+        render_attachments(attachments)
         if user_text:
             st.markdown(user_text)
+        for warning in file_warnings:
+            st.warning(warning)
 
-    web_context = ""
-    web_sources: list[dict[str, str]] = []
-    web_warnings: list[str] = []
-
-    if user_text and should_browse(user_text, st.session_state.web_mode):
-        with st.status("Browsing the web…", expanded=False) as status:
-            web_context, web_sources, web_warnings = browse_web(
-                user_text,
-                st.session_state.web_mode,
-                st.session_state.browse_depth,
-            )
-            if web_sources:
+    tool_result = ToolResult()
+    if user_text:
+        with st.status("Selecting and running tools…", expanded=False) as status:
+            tool_result = run_tools(user_text)
+            if tool_result.events:
                 status.update(
-                    label=f"Found {len(web_sources)} web source(s)",
+                    label=f"Completed {len(tool_result.events)} tool action(s)",
                     state="complete",
                 )
+            elif tool_result.warnings:
+                status.update(label="Tool finished with warnings", state="error")
             else:
-                status.update(
-                    label="No usable web sources found",
-                    state="error",
-                )
+                status.update(label="No external tool needed", state="complete")
 
     user_message = {
         "role": "user",
         "text": user_text,
-        "images": processed_images,
-        "web_context": web_context,
+        "attachments": attachments,
+        "attachment_context": attachment_context,
+        "tool_context": tool_result.context,
+        "created_at": utc_now(),
     }
-    st.session_state.chat_messages.append(user_message)
+    st.session_state.messages.append(user_message)
+
+    sources = source_dicts(tool_result)
+    warnings = [*file_warnings, *tool_result.warnings]
+    start_time = time.perf_counter()
+    first_token_time: float | None = None
+    usage: dict[str, Any] = {}
 
     with st.chat_message("assistant", avatar="🌙"):
-        response_placeholder = st.empty()
+        response_box = st.empty()
         full_response = ""
-
         try:
             stream = client.chat.completions.create(
-                model=MODEL,
+                model=st.session_state.model_id.strip() or DEFAULT_MODEL,
                 messages=build_api_messages(),
                 stream=True,
-                max_tokens=1_500,
+                stream_options={"include_usage": True},
+                max_tokens=MODE_SETTINGS[st.session_state.mode]["max_tokens"],
+                temperature=0.3,
             )
 
             for chunk in stream:
+                if getattr(chunk, "usage", None):
+                    chunk_usage = chunk.usage
+                    usage = {
+                        "prompt_tokens": getattr(chunk_usage, "prompt_tokens", None),
+                        "completion_tokens": getattr(chunk_usage, "completion_tokens", None),
+                        "total_tokens": getattr(chunk_usage, "total_tokens", None),
+                    }
+
                 if not chunk.choices:
                     continue
-
-                delta = chunk.choices[0].delta
-                content = getattr(delta, "content", None)
-
+                content = getattr(chunk.choices[0].delta, "content", None)
                 if content:
+                    if first_token_time is None:
+                        first_token_time = time.perf_counter()
                     full_response += content
-                    response_placeholder.markdown(full_response + "▌")
+                    response_box.markdown(full_response + "▌")
 
             if not full_response:
-                full_response = "The model returned no visible answer. Please try again."
+                full_response = (
+                    "The model returned no visible response. Try again, switch the model "
+                    "ID, or use Fast mode with a shorter conversation."
+                )
+            response_box.markdown(full_response)
 
-            response_placeholder.markdown(full_response)
-            render_sources(web_sources, web_warnings)
-
-        except Exception as error:
+        except Exception as exc:
             full_response = (
-                "I could not complete that request.\n\n"
-                f"**API error:** `{error}`"
+                "I could not complete the request.\n\n"
+                f"**API error:** `{exc}`\n\n"
+                "Try Fast mode, start a new chat, or verify the model ID in TokenRouter."
             )
-            response_placeholder.error(full_response)
-            render_sources(web_sources, web_warnings)
+            response_box.error(full_response)
 
-    st.session_state.chat_messages.append(
+        elapsed = time.perf_counter() - start_time
+        latency_text = f"{elapsed:.1f}s total"
+        if first_token_time is not None:
+            latency_text += f" · {first_token_time - start_time:.1f}s to first text"
+        if usage.get("total_tokens"):
+            latency_text += f" · {usage['total_tokens']:,} tokens"
+        st.caption(latency_text)
+
+        render_tool_events(tool_result.events)
+        render_sources(sources, warnings)
+
+        if full_response and not full_response.startswith("I could not complete"):
+            st.download_button(
+                "Download this response as Word",
+                data=answer_to_docx(full_response),
+                file_name="kimi-response.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+
+    st.session_state.messages.append(
         {
             "role": "assistant",
             "text": full_response,
-            "images": [],
-            "web_sources": web_sources,
-            "web_warnings": web_warnings,
+            "attachments": [],
+            "sources": sources,
+            "warnings": warnings,
+            "tool_events": tool_result.events,
+            "usage": usage,
+            "elapsed_seconds": round(elapsed, 2),
+            "created_at": utc_now(),
         }
     )
