@@ -23,6 +23,12 @@ def search_news_resilient(
         timelimit=timelimit,
     )
     enrich_news_sources(sources, limit=min(max_results, 5))
+
+    for source in sources:
+        status = "Full article read" if source.content else "Headline/snippet only"
+        existing = (source.snippet or "").strip()
+        source.snippet = f"{status} — {existing}" if existing else status
+
     return sources
 
 
