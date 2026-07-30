@@ -4,20 +4,22 @@ The public API in ``web_tools`` is patched at package import time with:
 
 - an isolated local Playwright browser for rendered public pages and explicit
   ``/browser`` commands;
-- compact browser-command context to avoid unnecessary multi-thousand-token
-  prompts after simple navigation actions;
+- direct browser-command responses that bypass TokenRouter after the action;
+- compact browser-command context for inspection output;
 - a multi-provider recent-news pipeline;
 - publisher-link resolution and full-article extraction where possible.
 """
 
 from . import web_tools as _web_tools
 from .browser_agent import install_browser_patches
+from .browser_direct import install_direct_browser_response_patch
 from .browser_speed import install_browser_speed_patch
 
 # Install the browser reader before importing article/news modules so their
 # local ``fetch_public_page`` references inherit the Playwright fallback.
 install_browser_patches(_web_tools)
 install_browser_speed_patch(_web_tools)
+install_direct_browser_response_patch()
 
 from .article_resolver import enrich_news_sources
 from .news_resilient import search_news_resilient as _provider_news_search
