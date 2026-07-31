@@ -107,8 +107,7 @@ class ChatProvider(Protocol):
         """Return capability metadata for ``model_id``."""
         ...
 
-    def list_models(self) -> Sequence[ModelInfo]:
-        ...
+    def list_models(self) -> Sequence[ModelInfo]: ...
 
     def stream_chat(
         self,

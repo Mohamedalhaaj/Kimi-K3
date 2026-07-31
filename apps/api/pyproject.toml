@@ -57,6 +57,8 @@ ignore = ["S101"]
 [tool.mypy]
 python_version = "3.13"
 files = ["src"]
+mypy_path = "src"
+explicit_package_bases = true
 strict = true
 warn_unused_ignores = true
 disallow_untyped_defs = true

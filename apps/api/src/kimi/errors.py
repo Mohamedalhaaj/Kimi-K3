@@ -61,18 +61,23 @@ class KimiError(Exception):
     code: ErrorCode = ErrorCode.INTERNAL
     #: Shown to the user. Must never contain a raw exception or a secret.
     user_message: str = "Something went wrong."
+    #: Whether retrying the same request could plausibly succeed. This belongs
+    #: to the error *type* — a rate limit is always worth retrying and a bad API
+    #: key never is — so call sites cannot forget to set it and leave the UI
+    #: unable to offer a retry.
+    default_retryable: bool = False
 
     def __init__(
         self,
         user_message: str | None = None,
         *,
         detail: str | None = None,
-        retryable: bool = False,
+        retryable: bool | None = None,
         context: dict[str, Any] | None = None,
     ) -> None:
         self.user_message = user_message or self.user_message
         self.detail = detail
-        self.retryable = retryable
+        self.retryable = self.default_retryable if retryable is None else retryable
         self.context = context or {}
         super().__init__(self.user_message)
 
@@ -97,6 +102,7 @@ class KimiError(Exception):
 class ModelError(KimiError):
     code = ErrorCode.MODEL_UNAVAILABLE
     user_message = "The AI model could not be reached. Please try again."
+    default_retryable = True
 
 
 class ModelAuthError(ModelError):
@@ -104,21 +110,26 @@ class ModelAuthError(ModelError):
     user_message = (
         "The model provider rejected the API key. Check TOKENROUTER_API_KEY in your .env."
     )
+    # A bad credential will fail identically every time.
+    default_retryable = False
 
 
 class ModelRateLimitedError(ModelError):
     code = ErrorCode.MODEL_RATE_LIMITED
     user_message = "The model provider is rate limiting requests. Try again shortly."
+    default_retryable = True
 
 
 class ModelTimeoutError(ModelError):
     code = ErrorCode.MODEL_TIMEOUT
     user_message = "The model took too long to respond."
+    default_retryable = True
 
 
 class ModelBadResponseError(ModelError):
     code = ErrorCode.MODEL_BAD_RESPONSE
     user_message = "The model returned a response this app could not read."
+    default_retryable = True
 
 
 class UnsupportedCapabilityError(KimiError):

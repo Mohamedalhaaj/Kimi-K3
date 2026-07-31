@@ -66,6 +66,20 @@ def _fallback_model(model_id: str) -> ModelInfo:
     return ModelInfo(model_id, model_id, _TEXT_ONLY, 32_000)
 
 
+def known_models() -> tuple[ModelInfo, ...]:
+    """The static capability registry.
+
+    Exposed without a credential so the model picker can render before the API
+    key is configured.
+    """
+    return tuple(_KNOWN.values())
+
+
+def model_info(model_id: str) -> ModelInfo:
+    """Capabilities for ``model_id``, conservatively text-only when unknown."""
+    return _KNOWN.get(model_id) or _fallback_model(model_id)
+
+
 class TokenRouterProvider(ChatProvider):
     """Streaming chat against an OpenAI-compatible endpoint."""
 
