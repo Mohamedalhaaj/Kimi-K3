@@ -51,3 +51,6 @@ coverage/
 # ---- os ------------------------------------------------------------------
 .DS_Store
 Thumbs.db
+
+# local run artifacts
+.local/
