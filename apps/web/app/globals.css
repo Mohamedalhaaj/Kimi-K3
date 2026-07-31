@@ -1,0 +1,221 @@
+@import "tailwindcss";
+
+/* Dark mode is class-driven so the user can override the OS preference. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* ---- Surfaces --------------------------------------------------- */
+  --color-bg: #ffffff;
+  --color-bg-sunken: #f6f8fb;
+  --color-bg-raised: #ffffff;
+  --color-bg-hover: #f0f3f8;
+  --color-border: #e3e8ef;
+  --color-border-strong: #cbd3e0;
+
+  /* ---- Ink -------------------------------------------------------- */
+  --color-fg: #0b1220;
+  --color-fg-muted: #5b6577;
+  /* Used for placeholders and hints — still text, so it must clear AA on both
+     the content and the sidebar surface. #7b8496 read nicer but was 3.76:1. */
+  --color-fg-subtle: #6a7280;
+
+  /* ---- Accent ------------------------------------------------------
+     --color-accent is the button FILL (white label = 4.76:1).
+     --color-accent-fg is accent TEXT, lifted in dark where the brand
+     blue would only reach 3.81:1. Both measured, see scripts/contrast.mjs. */
+  --color-accent: #0171dd;
+  --color-accent-fg: #0171dd;
+  --color-accent-hover: #0162c0;
+  --color-accent-soft: #eaf3fd;
+
+  /* ---- Status ----------------------------------------------------- */
+  --color-danger: #b42318;
+  --color-danger-soft: #fef3f2;
+  --color-warn-fg: #93500b;
+  --color-warn-soft: #fffaeb;
+
+  /* ---- Type: one family, fixed scale at ~1.14 --------------------- */
+  --font-sans: var(--font-geist-sans), -apple-system, BlinkMacSystemFont,
+    "SF Pro Text", "Segoe UI", system-ui, "SF Arabic", "Geeza Pro",
+    "Noto Sans Arabic", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo,
+    monospace;
+
+  --text-2xs: 0.6875rem;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+
+  /* ---- Depth: offset + blur, never a zero-offset halo ------------- */
+  --shadow-sm: 0 1px 2px rgb(11 18 32 / 0.06);
+  --shadow-md: 0 4px 12px rgb(11 18 32 / 0.08), 0 1px 2px rgb(11 18 32 / 0.04);
+  --shadow-lg: 0 8px 24px rgb(11 18 32 / 0.12), 0 2px 6px rgb(11 18 32 / 0.06);
+
+  --radius-control: 0.5rem;
+  --radius-panel: 0.75rem;
+
+  /* Prose measure — 72ch keeps chat inside the 65–75ch band. */
+  --container-measure: 72ch;
+}
+
+.dark {
+  --color-bg: #0f1622;
+  --color-bg-sunken: #0b111b;
+  --color-bg-raised: #16202e;
+  --color-bg-hover: #1a2534;
+  --color-border: #1e2938;
+  --color-border-strong: #2c3a4d;
+
+  --color-fg: #e8ecf3;
+  --color-fg-muted: #98a2b3;
+  --color-fg-subtle: #7d8798;
+
+  --color-accent-fg: #4da3f5;
+  --color-accent-hover: #1a84e8;
+  --color-accent-soft: #10243a;
+
+  --color-danger: #fda29b;
+  --color-danger-soft: #2a1512;
+  --color-warn-fg: #fcd34d;
+  --color-warn-soft: #2a2110;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 4px 12px rgb(0 0 0 / 0.45), 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 8px 24px rgb(0 0 0 / 0.5), 0 2px 6px rgb(0 0 0 / 0.35);
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    background: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* A single, consistent focus treatment across the whole surface. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent-fg);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  ::placeholder {
+    color: var(--color-fg-subtle);
+  }
+
+  /* Arabic needs a touch more leading than Latin at the same size. */
+  [dir="rtl"] {
+    line-height: 1.85;
+  }
+}
+
+@layer utilities {
+  /* The one authored moment: assistant text arriving. */
+  @keyframes message-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  .animate-message-in {
+    animation: message-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  @keyframes caret-blink {
+    0%,
+    45% {
+      opacity: 1;
+    }
+    50%,
+    95% {
+      opacity: 0.25;
+    }
+  }
+  .streaming-caret::after {
+    content: "";
+    display: inline-block;
+    width: 0.45em;
+    height: 1.05em;
+    margin-inline-start: 0.15em;
+    vertical-align: text-bottom;
+    background: var(--color-accent-fg);
+    border-radius: 1px;
+    animation: caret-blink 1s steps(1, end) infinite;
+  }
+
+  .measure {
+    max-width: var(--container-measure);
+  }
+
+  /* Skeletons, not spinners, for content-shaped loading. */
+  @keyframes shimmer {
+    100% {
+      transform: translateX(100%);
+    }
+  }
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background: var(--color-bg-hover);
+  }
+  .skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgb(255 255 255 / 0.35),
+      transparent
+    );
+    animation: shimmer 1.4s infinite;
+  }
+  .dark .skeleton::after {
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgb(255 255 255 / 0.06),
+      transparent
+    );
+  }
+}
+
+/* Everything collapses to opacity-only, and streaming stops blinking. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .animate-message-in {
+    animation: none;
+  }
+  .streaming-caret::after {
+    animation: none;
+    opacity: 1;
+  }
+}
