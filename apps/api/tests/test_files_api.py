@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from httpx import AsyncClient
-
 from tests.conftest import parse_sse
 from tests.test_files import make_blank_pdf, make_png, make_xlsx
 

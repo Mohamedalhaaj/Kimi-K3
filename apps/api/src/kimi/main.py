@@ -18,7 +18,7 @@ from kimi.db.migrate import upgrade_to_head
 from kimi.db.session import create_all, dispose, get_engine
 from kimi.errors import ErrorCode, KimiError
 from kimi.logging import configure_logging
-from kimi.routers import chat, conversations, files, health, tools
+from kimi.routers import chat, conversations, exports, files, health, tools
 from kimi.tools.builtin import register_builtin_tools
 
 log = structlog.get_logger(__name__)
@@ -142,6 +142,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(chat.router, prefix="/api")
     app.include_router(tools.router, prefix="/api")
     app.include_router(files.router, prefix="/api")
+    app.include_router(exports.router, prefix="/api")
     return app
 
 

@@ -166,13 +166,54 @@ def parse_pdf(doc: ParsedDocument, data: bytes) -> ParsedDocument:
     if read_pages < total_pages:
         doc.warnings.append(f"Only the first {read_pages} of {total_pages} pages were read.")
 
-    # The load-bearing fix: pages exist but none carry text.
+    # The load-bearing fix: pages exist but none carry text. OCR runs HERE and
+    # only here — never on a PDF that already has a text layer.
     if pages_with_text == 0:
+        from kimi.files.ocr import MAX_OCR_PAGES, ocr_available, ocr_pdf
+
+        if ocr_available():
+            recognised = ocr_pdf(data)
+            if recognised:
+                for page_number, text in recognised:
+                    body, was_cut = clip(tidy(text))
+                    segments.append(
+                        Segment(
+                            ref=SegmentRef(RefKind.PAGE, page_number),
+                            text=body,
+                            truncated=was_cut,
+                        )
+                    )
+                doc.segments, over_budget = _budgeted(segments)
+                doc.metadata |= {
+                    "pages_with_text": len(recognised),
+                    "ocr": True,
+                    "ocr_pages_limit": MAX_OCR_PAGES,
+                }
+                doc.status = ParseStatus.PARTIAL
+                doc.warnings.append(
+                    "This PDF had no text layer; the text below was recognised by "
+                    "OCR and may contain errors."
+                )
+                if total_pages > len(recognised):
+                    doc.warnings.append(f"OCR covered {len(recognised)} of {total_pages} pages.")
+                doc.summary = (
+                    f"{doc.filename}: scanned PDF, {total_pages} page(s), "
+                    f"{len(recognised)} read by OCR."
+                )
+                return doc
+
+            doc.status = ParseStatus.NO_TEXT_LAYER
+            doc.summary = (
+                f"{doc.filename}: {total_pages} page(s) with no selectable text. "
+                "OCR ran but recognised nothing readable."
+            )
+            return doc
+
         doc.status = ParseStatus.NO_TEXT_LAYER
         doc.summary = (
             f"{doc.filename}: {total_pages} page(s), but no selectable text. "
-            "This looks like a scanned document. OCR is not available in this "
-            "build, so its contents could not be read."
+            "This looks like a scanned document, and OCR is not installed, so "
+            "its contents could not be read."
         )
         return doc
 

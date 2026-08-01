@@ -28,6 +28,9 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = ["asyncpg>=0.30.0"]
+# OCR is optional: the app detects scanned PDFs and says so when it is absent,
+# rather than silently returning empty text.
+ocr = ["pytesseract>=0.3.13", "pypdfium2>=4.30"]
 
 [dependency-groups]
 dev = [
@@ -75,5 +78,5 @@ disallow_untyped_defs = true
 plugins = []
 
 [[tool.mypy.overrides]]
-module = ["aiosqlite.*", "openpyxl.*", "ddgs.*"]
+module = ["aiosqlite.*", "openpyxl.*", "ddgs.*", "pytesseract.*", "pypdfium2.*"]
 ignore_missing_imports = true

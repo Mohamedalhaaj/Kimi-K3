@@ -175,9 +175,11 @@ def test_scanned_pdf_is_reported_not_silently_dropped() -> None:
     assert doc.status is ParseStatus.NO_TEXT_LAYER
     assert doc.metadata["pages"] == 3
     # The model must still learn the file exists and why it is unreadable.
+    # The exact wording depends on whether OCR is installed and was attempted;
+    # what must hold is that the file is named, sized, and explained.
     assert "scan.pdf" in doc.summary
     assert "3 page" in doc.summary
-    assert "scanned" in doc.summary.lower()
+    assert "no selectable text" in doc.summary.lower()
 
     block = to_prompt_block([doc])
     assert "scan.pdf" in block
@@ -396,3 +398,104 @@ def test_prompt_block_labels_every_segment_for_citation() -> None:
 
 def test_prompt_block_is_empty_for_no_documents() -> None:
     assert to_prompt_block([]) == ""
+
+
+# ---- OCR ------------------------------------------------------------------
+
+
+def _image_only_pdf(lines: list[str], pages: int = 1) -> bytes:
+    """A PDF whose text exists only as pixels — i.e. a scan."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    def render() -> Image.Image:
+        img = Image.new("RGB", (1240, 1754), "white")
+        draw = ImageDraw.Draw(img)
+        try:
+            font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 46)
+        except OSError:  # pragma: no cover - depends on host fonts
+            font = ImageFont.load_default()
+        y = 120
+        for line in lines:
+            draw.text((110, y), line, fill="black", font=font)
+            y += 80
+        return img
+
+    rendered = [render() for _ in range(pages)]
+    buf = io.BytesIO()
+    rendered[0].save(buf, format="PDF", save_all=True, append_images=rendered[1:], resolution=150)
+    return buf.getvalue()
+
+
+def test_ocr_reads_a_scanned_pdf_when_tesseract_is_installed() -> None:
+    from kimi.files.ocr import ocr_available
+
+    if not ocr_available():
+        pytest.skip("tesseract is not installed on this host")
+
+    doc = parse_bytes(
+        "scan.pdf",
+        _image_only_pdf(["Libya Oil Production Report", "Sharara output 300000 bpd"]),
+    )
+
+    assert doc.metadata.get("ocr") is True
+    assert doc.status is ParseStatus.PARTIAL
+    assert doc.segments
+    text = " ".join(s.text for s in doc.segments)
+    assert "Libya" in text
+    assert "Sharara" in text
+    # The user must be told the text is machine-recognised, not authoritative.
+    assert any("OCR" in w for w in doc.warnings)
+    assert doc.segments[0].ref.label == "Page 1"
+
+
+def _text_layer_pdf(body: str) -> bytes:
+    """A minimal PDF carrying a real text layer, hand-built."""
+    content = f"BT /F1 24 Tf 72 700 Td ({body}) Tj ET".encode()
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n" + content + b"\nendstream",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body_bytes in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{number} 0 obj\n".encode() + body_bytes + b"\nendobj\n"
+    xref_at = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n".encode()
+    out += b"0000000000 65535 f \n"
+    for offset in offsets:
+        out += f"{offset:010d} 00000 n \n".encode()
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_at}\n".encode()
+    out += b"%%EOF\n"
+    return bytes(out)
+
+
+def test_ocr_is_not_used_on_a_pdf_that_already_has_text() -> None:
+    """The brief forbids OCRing every page by default."""
+    from kimi.files.ocr import ocr_available
+
+    if not ocr_available():
+        pytest.skip("tesseract is not installed on this host")
+
+    doc = parse_bytes("digital.pdf", _text_layer_pdf("Sharara field output 300000 bpd"))
+
+    assert doc.status is ParseStatus.PARSED
+    assert "Sharara" in " ".join(s.text for s in doc.segments)
+    # The decisive assertion: OCR never ran, because it was never needed.
+    assert doc.metadata.get("ocr") is not True
+    assert not any("OCR" in w for w in doc.warnings)
+
+
+def test_missing_ocr_is_reported_honestly(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kimi.files import ocr
+
+    monkeypatch.setattr(ocr, "ocr_available", lambda: False)
+    doc = parse_bytes("scan.pdf", make_blank_pdf(2))
+
+    assert doc.status is ParseStatus.NO_TEXT_LAYER
+    assert "OCR is not installed" in doc.summary
+    assert doc.metadata.get("ocr") is not True
