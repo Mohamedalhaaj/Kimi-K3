@@ -1,6 +1,6 @@
 # Kimi-K3 — Phase 0 Consolidated Audit
 
-Repository: `/Users/mohamedalhaj/Documents/Kimi-K3` · 3,569 LOC across 12 project Python files · 33 commits, single `main` branch · Python 3.14 venv · no tests, no logging, no CI.
+Repository: this repository · 3,569 LOC across 12 project Python files · 33 commits, single `main` branch · Python 3.14 venv · no tests, no logging, no CI.
 
 ---
 
@@ -176,7 +176,7 @@ The two surviving date filters have **opposite semantics for undated items**: de
 
 ### What is on disk but ignored
 
-- `/Users/mohamedalhaj/Documents/Kimi-K3/.env` exists, 72 bytes, one key: `TOKENROUTER_API_KEY`. It is correctly matched by `.gitignore:1`. It is unencrypted under `~/Documents/` — a directory typically covered by iCloud Drive, Time Machine and indexing agents — and readable by any process running as this user. `README.md:30` documents this as the intended setup.
+- A repository-root `.env` exists holding one key, `TOKENROUTER_API_KEY`. It is correctly matched by `.gitignore:1`. It is unencrypted under `~/Documents/` — a directory typically covered by iCloud Drive, Time Machine and indexing agents — and readable by any process running as this user. `README.md:30` documents this as the intended setup.
 - `~/.kimi-workspace/` (`core/browser_agent.py:45-48`) holds `browser-profile/Default/{Cookies, Local Storage, Session Storage}`, `browser-state.json`, and `browser-last.png`. It is anchored to `Path.home()`, so it is **outside the repository** and has never been committable — but it is a global, user-wide, never-expiring credential store with no clear/reset command and no size cap.
 
 ### `.gitignore` gaps (6 lines total: `.env`, `.venv/`, `__pycache__/`, `*.py[cod]`, `.DS_Store`, `.streamlit/secrets.toml`)
