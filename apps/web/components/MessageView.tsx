@@ -3,7 +3,8 @@
 import { useState } from "react";
 import type { Message } from "@/lib/types";
 import { detectDirection } from "@/lib/direction";
-import { AlertIcon, CheckIcon, CopyIcon, RefreshIcon } from "./icons";
+import { AlertIcon, CheckIcon, CopyIcon, DownloadIcon, RefreshIcon } from "./icons";
+import { exportUrls } from "@/lib/api";
 import { CitedText, Sources } from "./Sources";
 import { ToolActivity } from "./ToolActivity";
 
@@ -49,6 +50,70 @@ function CopyButton({ text }: { text: string }) {
       {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
       {copied ? "Copied" : "Copy"}
     </button>
+  );
+}
+
+function ExportMenu({ message }: { message: Message }) {
+  const [open, setOpen] = useState(false);
+  const hasSources = (message.citations?.length ?? 0) > 0;
+  // A local id means the turn has not been persisted yet, so there is nothing
+  // on the server to export.
+  const persisted = !message.id.startsWith("local-") && !message.id.startsWith("draft-");
+  if (!persisted) return null;
+
+  const items = [
+    { format: "docx" as const, label: "Word (.docx)" },
+    { format: "md" as const, label: "Markdown (.md)" },
+    ...(hasSources
+      ? [
+          { format: "xlsx" as const, label: "Sources (.xlsx)" },
+          { format: "csv" as const, label: "Sources (.csv)" },
+        ]
+      : []),
+  ];
+
+  return (
+    <span className="relative inline-block">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className="inline-flex items-center gap-1.5 rounded-control px-2 py-1 text-2xs text-fg-muted transition-colors hover:bg-bg-hover hover:text-fg"
+      >
+        <DownloadIcon className="size-3.5" />
+        Export
+      </button>
+
+      {open && (
+        <>
+          {/* Click-away layer so the menu closes without a document listener. */}
+          <button
+            aria-hidden
+            tabIndex={-1}
+            onClick={() => setOpen(false)}
+            className="fixed inset-0 z-40 cursor-default"
+          />
+          <span
+            role="menu"
+            className="absolute bottom-full z-50 mb-1 flex min-w-44 flex-col rounded-panel border border-border bg-bg-raised p-1 shadow-lg"
+          >
+            {items.map((item) => (
+              <a
+                key={item.format}
+                role="menuitem"
+                href={exportUrls.message(message.id, item.format)}
+                download
+                onClick={() => setOpen(false)}
+                className="rounded-control px-2.5 py-1.5 text-start text-xs text-fg no-underline transition-colors hover:bg-bg-hover"
+              >
+                {item.label}
+              </a>
+            ))}
+          </span>
+        </>
+      )}
+    </span>
   );
 }
 
@@ -141,6 +206,7 @@ export function MessageView({ message, isStreaming, onRegenerate }: Props) {
               Regenerate
             </button>
           )}
+          <ExportMenu message={message} />
         </div>
       )}
 

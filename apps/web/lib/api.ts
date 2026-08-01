@@ -59,6 +59,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** Direct download URLs — the browser fetches these, not the app. */
+export const exportUrls = {
+  message: (messageId: string, format: "docx" | "md" | "csv" | "xlsx") =>
+    `${BASE}/api/exports/message/${messageId}?format=${format}`,
+  conversation: (conversationId: string, format: "docx" | "md" | "json") =>
+    `${BASE}/api/exports/conversation/${conversationId}?format=${format}`,
+};
+
 export const api = {
   listConversations: (q?: string) =>
     request<{ items: Conversation[]; page: { total: number } }>(

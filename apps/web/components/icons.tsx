@@ -117,3 +117,9 @@ export const PaperclipIcon = ({ className }: P) => (
     <path d="M12.4 7.6 8 12a2.4 2.4 0 0 1-3.4-3.4l4.6-4.6a1.6 1.6 0 0 1 2.3 2.3l-4.6 4.6a.8.8 0 0 1-1.1-1.1l4.2-4.2" />
   </svg>
 );
+
+export const DownloadIcon = ({ className }: P) => (
+  <svg {...base} className={className}>
+    <path d="M8 2.8v7.2M5.2 7.6 8 10.4l2.8-2.8M3.2 12.4h9.6" />
+  </svg>
+);
