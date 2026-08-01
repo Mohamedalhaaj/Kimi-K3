@@ -29,11 +29,12 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 
 from kimi.config import Settings
-from kimi.db.base import Conversation, utcnow
+from kimi.db.base import Attachment, Conversation, utcnow
 from kimi.db.base import Message as DbMessage
 from kimi.db.session import get_sessionmaker
 from kimi.deps import ProviderDep, SettingsDep
 from kimi.errors import ErrorCode, KimiError, NotFoundError
+from kimi.files.service import to_prompt_block as documents_to_prompt_block
 from kimi.providers.base import Capability, ChatProvider, StreamDone, TextDelta
 from kimi.schemas.api import ChatRequest
 from kimi.services.context import (
@@ -65,6 +66,54 @@ def _format_deterministic(tool_id: str, invocation: ToolInvocation) -> str:
     if tool_id == "calculator":
         return f"{result.get('expression', '')} = **{result.get('result', '')}**"
     return str(result)
+
+
+def _documents_block(rows: list[Attachment]) -> str:
+    """Render stored attachments as the fenced untrusted-documents block.
+
+    Rebuilds the parsed shape from the database so a conversation reloaded after
+    a restart produces exactly the same context as when it was first sent.
+    """
+    if not rows:
+        return ""
+
+    from kimi.files.models import (
+        DocumentKind,
+        ParsedDocument,
+        ParseStatus,
+        RefKind,
+        Segment,
+        SegmentRef,
+    )
+
+    documents: list[ParsedDocument] = []
+    for row in rows:
+        doc = ParsedDocument(
+            id=row.id,
+            filename=row.filename,
+            kind=DocumentKind(row.kind),
+            status=ParseStatus(row.status),
+            mime_type=row.mime_type,
+            size_bytes=row.size_bytes,
+            summary=row.summary,
+            metadata=row.doc_metadata or {},
+            warnings=list(row.warnings or []),
+        )
+        for raw in row.segments or []:
+            ref = raw.get("ref", {})
+            doc.segments.append(
+                Segment(
+                    ref=SegmentRef(
+                        RefKind(ref.get("kind", "whole")),
+                        int(ref.get("number", 0) or 0),
+                        str(ref.get("name", "")),
+                    ),
+                    text=str(raw.get("text", "")),
+                    truncated=bool(raw.get("truncated")),
+                )
+            )
+        documents.append(doc)
+    return documents_to_prompt_block(documents)
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -159,6 +208,24 @@ async def _generate(
         assistant_seq = next_seq + 1
         conversation_title = convo.title
 
+        attachments: list[Attachment] = []
+        if payload.document_ids:
+            rows = (
+                (
+                    await session.execute(
+                        select(Attachment).where(
+                            Attachment.id.in_(payload.document_ids),
+                            # Scoped to this conversation: a file id from another
+                            # conversation must not be readable by guessing it.
+                            Attachment.conversation_id == convo.id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            attachments = list(rows)
+
     yield _sse(
         "start",
         {
@@ -167,6 +234,10 @@ async def _generate(
             "user_message_id": user_row.id,
             "model_id": model_id,
             "mode": mode,
+            "attachments": [
+                {"id": a.id, "filename": a.filename, "status": a.status, "kind": a.kind}
+                for a in attachments
+            ],
         },
     )
 
@@ -254,8 +325,15 @@ async def _generate(
     # concatenated into the user's own message, so the model can tell the
     # user's words apart from retrieved data.
     system_prompt = DEFAULT_SYSTEM_PROMPT
+    document_block = _documents_block(attachments)
+    if document_block:
+        system_prompt = f"{system_prompt}\n\n{document_block}"
     if tool_context_block:
-        system_prompt = f"{DEFAULT_SYSTEM_PROMPT}\n\n{tool_context_block}"
+        system_prompt = f"{system_prompt}\n\n{tool_context_block}"
+
+    # Images attached as documents travel with the turn like inline images do.
+    pending_images = [i.data_url for i in payload.images]
+    pending_images += [a.image_data_url for a in attachments if a.image_data_url]
 
     built = build_context(
         history=history,
@@ -263,7 +341,7 @@ async def _generate(
         context_window=info.context_window,
         mode=mode,  # type: ignore[arg-type]
         supports_vision=info.supports(Capability.VISION),
-        pending_images=[i.data_url for i in payload.images],
+        pending_images=pending_images,
     )
 
     yield _sse(

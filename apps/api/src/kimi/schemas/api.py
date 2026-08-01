@@ -91,6 +91,8 @@ class ChatRequest(BaseModel):
     mode: ChatMode | None = None
     images: Annotated[list[ImageIn], Field(max_length=8)] = []
     research: ResearchMode = "auto"
+    #: Attachments previously uploaded to this conversation.
+    document_ids: Annotated[list[str], Field(max_length=6)] = []
 
 
 class ErrorOut(BaseModel):

@@ -88,8 +88,47 @@ class Conversation(Base, TimestampMixin):
         passive_deletes=True,
         order_by="Message.seq",
     )
+    attachments: Mapped[list[Attachment]] = relationship(
+        back_populates="conversation", cascade="all, delete-orphan", passive_deletes=True
+    )
 
     __table_args__ = (Index("ix_conversations_pinned_updated", "pinned", "updated_at"),)
+
+
+class Attachment(Base, TimestampMixin):
+    """A parsed upload, kept so a conversation survives a restart with its files.
+
+    The file bytes are NOT stored — only the parsed text and its provenance.
+    That keeps private documents off disk while leaving the conversation
+    reproducible, and removes path-traversal and temp-cleanup as concerns.
+    """
+
+    __tablename__ = "attachments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+    )
+    #: Set once the attachment is sent with a turn.
+    message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), default=None, index=True
+    )
+
+    filename: Mapped[str] = mapped_column(String(300))
+    kind: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(32))
+    mime_type: Mapped[str] = mapped_column(String(120), default="")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+
+    summary: Mapped[str] = mapped_column(Text, default="")
+    #: Citable segments with their page/slide/sheet refs.
+    segments: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
+    doc_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    warnings: Mapped[list[str] | None] = mapped_column(JSON, default=None)
+    #: Images only; normalised data URL sent to a vision model.
+    image_data_url: Mapped[str | None] = mapped_column(Text, default=None)
+
+    conversation: Mapped[Conversation] = relationship(back_populates="attachments")
 
 
 class Message(Base, TimestampMixin):

@@ -17,6 +17,13 @@ dependencies = [
     # DuckDuckGo search adapter. Imported lazily so the app still runs if it
     # is uninstallable in a given environment.
     "ddgs>=9.0",
+    # Document parsing. Deliberately no pandas: the stdlib csv module gives a
+    # true row count cheaply, which is the audited CSV defect.
+    "pypdf>=5.1",
+    "python-docx>=1.1",
+    "python-pptx>=1.0",
+    "openpyxl>=3.1",
+    "Pillow>=11.0",
 ]
 
 [project.optional-dependencies]
@@ -68,5 +75,5 @@ disallow_untyped_defs = true
 plugins = []
 
 [[tool.mypy.overrides]]
-module = ["aiosqlite.*"]
+module = ["aiosqlite.*", "openpyxl.*", "ddgs.*"]
 ignore_missing_imports = true
