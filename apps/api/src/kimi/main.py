@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from kimi.config import Settings, get_settings
+from kimi.db.migrate import upgrade_to_head
 from kimi.db.session import create_all, dispose, get_engine
 from kimi.errors import ErrorCode, KimiError
 from kimi.logging import configure_logging
@@ -28,10 +29,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     configure_logging(level=settings.log_level, json_output=settings.environment == "production")
     engine = get_engine(settings)
-    # Local installs get their schema created on boot so that `start-local.sh`
-    # is genuinely one command. Production is expected to run Alembic first;
-    # create_all is a no-op when the tables already exist.
-    await create_all(engine)
+    # Migrations, not create_all: create_all adds missing tables but never
+    # missing columns, which left stale local databases failing at query time.
+    try:
+        await upgrade_to_head(settings.database_url)
+    except Exception as exc:
+        log.warning("db.migration_failed", exc_type=type(exc).__name__)
+        await create_all(engine)
     log.info(
         "api.startup",
         environment=settings.environment,

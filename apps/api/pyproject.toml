@@ -14,6 +14,9 @@ dependencies = [
     "httpx>=0.28.1",
     "structlog>=26.1.0",
     "python-multipart>=0.0.20",
+    # DuckDuckGo search adapter. Imported lazily so the app still runs if it
+    # is uninstallable in a given environment.
+    "ddgs>=9.0",
 ]
 
 [project.optional-dependencies]

@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from typing import Final
 from urllib.parse import urlparse
 
-from kimi.research.extract import canonicalise
+from kimi.research.extract import canonicalise, is_aggregator
 from kimi.research.models import ExtractionStatus, Source
 
 #: Well-known outlets with editorial process. Not exhaustive and not a
@@ -153,16 +153,27 @@ def dedupe(sources: list[Source]) -> list[Source]:
     return result
 
 
+#: Penalty for a link still pointing at a news aggregator.
+#:
+#: Google News moved to opaque, server-resolved article ids, so such a link may
+#: never resolve to a publisher. A source we cannot attribute, read, or let the
+#: user verify is genuinely less useful than a direct one, so it ranks lower —
+#: but it is not excluded, because sometimes it is the only coverage there is.
+AGGREGATOR_PENALTY: Final = 0.30
+
+
 def score_sources(
     sources: list[Source], *, window_hours: int | None, now: datetime | None = None
 ) -> list[Source]:
     for source in sources:
-        source.score = round(
+        score = (
             0.40 * recency(source.published_at, now=now, window_hours=window_hours)
             + 0.35 * authority(source.url)
-            + 0.25 * _STATUS_WEIGHT[source.status],
-            4,
+            + 0.25 * _STATUS_WEIGHT[source.status]
         )
+        if is_aggregator(source.url):
+            score -= AGGREGATOR_PENALTY
+        source.score = round(max(0.0, score), 4)
     return sources
 
 

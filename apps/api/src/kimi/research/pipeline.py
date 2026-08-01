@@ -17,11 +17,18 @@ from datetime import UTC, datetime
 
 import structlog
 
-from kimi.research.extract import ArticleExtractor, looks_like_article_url
+from kimi.research.extract import (
+    MIN_HEADLINE_MATCH,
+    ArticleExtractor,
+    headline_similarity,
+    is_aggregator,
+    looks_like_article_url,
+    resolve_redirect_param,
+)
 from kimi.research.models import ExtractionStatus, SearchResults, Source
 from kimi.research.net import SafeFetcher
-from kimi.research.providers import SearchProvider, default_providers
-from kimi.research.query import Intent, ResearchPlan, plan_research
+from kimi.research.providers import BingNewsRSS, SearchProvider, default_providers
+from kimi.research.query import UNBOUNDED, Intent, ResearchPlan, plan_research
 from kimi.research.rank import dedupe, diversify, score_sources, sort_newest_first
 from kimi.research.resilience import TTLCache
 
@@ -170,7 +177,40 @@ class ResearchPipeline:
     ) -> None:
         self._fetcher = fetcher or SafeFetcher()
         self._providers_override = providers
-        self._extractor = extractor or ArticleExtractor(fetcher=self._fetcher)
+        self._extractor = extractor or ArticleExtractor(
+            fetcher=self._fetcher, headline_resolver=self._resolve_by_headline
+        )
+        self._headline_provider = BingNewsRSS(fetcher=self._fetcher)
+
+    async def _resolve_by_headline(self, title: str, publisher: str) -> str | None:
+        """Find a direct publisher URL by searching for the exact headline.
+
+        Google News now uses opaque, server-resolved article ids, so an
+        aggregator link cannot be decoded locally. Searching a provider that
+        returns direct URLs is the remaining honest route to the publisher.
+
+        A match must clear MIN_HEADLINE_MATCH. The prototype accepted its
+        top-ranked result with no threshold at all, so an unrelated page was
+        confidently presented as the article.
+        """
+        query = f'"{title}" {publisher}'.strip() if publisher else f'"{title}"'
+        try:
+            found = await self._headline_provider.search(query, UNBOUNDED, limit=5)
+        except Exception:
+            return None
+        if not found.ok:
+            return None
+
+        best: tuple[float, str] | None = None
+        for candidate in found.sources:
+            url = candidate.url
+            direct = resolve_redirect_param(url) or url
+            if is_aggregator(direct) or not looks_like_article_url(direct):
+                continue
+            score = headline_similarity(title, candidate.title)
+            if score >= MIN_HEADLINE_MATCH and (best is None or score > best[0]):
+                best = (score, direct)
+        return best[1] if best else None
 
     async def aclose(self) -> None:
         await self._fetcher.aclose()

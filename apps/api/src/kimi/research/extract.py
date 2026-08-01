@@ -19,7 +19,8 @@ Fixes carried from the audit:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Final
 from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
 
@@ -27,7 +28,7 @@ import structlog
 
 from kimi.research.dates import extract_published_at
 from kimi.research.models import ExtractionStatus, RetrievalMethod, Source
-from kimi.research.net import SafeFetcher, UnsafeUrlError
+from kimi.research.net import FetchError, SafeFetcher, UnsafeUrlError
 
 log = structlog.get_logger(__name__)
 
@@ -237,14 +238,43 @@ def classify_body(text: str, *, http_status: int = 200) -> ExtractionStatus:
     return ExtractionStatus.SNIPPET_ONLY
 
 
+#: Minimum title overlap before an exact-headline search result is accepted as
+#: the same article. The prototype ranked from a score starting at 0 with no
+#: minimum, so an unrelated page was confidently "resolved"
+#: (AUDIT §5, article_resolver.py:183).
+MIN_HEADLINE_MATCH: Final = 0.6
+
+#: (headline, publisher) -> direct article URL, or None.
+HeadlineResolver = Callable[[str, str], Awaitable[str | None]]
+
+
+def _title_tokens(title: str) -> set[str]:
+    return {t for t in re.split(r"\W+", (title or "").lower(), flags=re.UNICODE) if len(t) > 2}
+
+
+def headline_similarity(a: str, b: str) -> float:
+    """Jaccard overlap of significant title tokens, 0.0-1.0."""
+    ta, tb = _title_tokens(a), _title_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
 @dataclass(slots=True)
 class ArticleExtractor:
     """Fetches an article, resolving aggregator links to the publisher first."""
 
     fetcher: SafeFetcher
     jina_enabled: bool = True
+    #: Optional last resort for aggregator links that cannot be resolved
+    #: locally. Google News moved to opaque, server-resolved article ids, so
+    #: the only remaining route to the publisher is to search for the exact
+    #: headline — which is the fallback the brief calls for.
+    headline_resolver: HeadlineResolver | None = field(default=None)
 
-    async def resolve_publisher_url(self, url: str) -> tuple[str, str | None]:
+    async def resolve_publisher_url(
+        self, url: str, *, title: str = "", publisher: str = ""
+    ) -> tuple[str, str | None]:
         """Return ``(publisher_url, aggregator_url_or_None)``."""
         if not is_aggregator(url):
             return url, None
@@ -255,29 +285,46 @@ class ArticleExtractor:
 
         try:
             page = await self.fetcher.fetch(url)
-        except UnsafeUrlError:
-            return url, None
+        except (UnsafeUrlError, FetchError):
+            page = None
 
-        canonical = extract_canonical(page.text, page.url)
-        if canonical and looks_like_article_url(canonical):
-            return canonical, url
-        # The fetch itself may have redirected out of the aggregator.
-        if not is_aggregator(page.url) and looks_like_article_url(page.url):
-            return page.url, url
+        if page is not None:
+            canonical = extract_canonical(page.text, page.url)
+            if canonical and looks_like_article_url(canonical):
+                return canonical, url
+            # The fetch itself may have redirected out of the aggregator.
+            if not is_aggregator(page.url) and looks_like_article_url(page.url):
+                return page.url, url
+
+        if self.headline_resolver and title:
+            found = await self.headline_resolver(title, publisher)
+            if found and looks_like_article_url(found) and not is_aggregator(found):
+                return found, url
+
         return url, None
 
     async def extract(self, source: Source) -> Source:
         """Populate ``source.content`` and set an honest status label."""
-        target, aggregator = await self.resolve_publisher_url(source.url)
+        target, aggregator = await self.resolve_publisher_url(
+            source.url, title=source.title, publisher=source.publisher
+        )
         if aggregator:
+            # An aggregator url is only returned once a publisher was found.
             source.aggregator_url = aggregator
             source.url = target
             if not source.publisher:
                 source.publisher = (urlparse(target).hostname or "").removeprefix("www.")
+        elif is_aggregator(target):
+            # Unresolved. Say so explicitly rather than letting the aggregator
+            # host stand in for a publisher the user cannot verify.
+            source.note = (
+                "Link stayed on the news aggregator; the original publisher page "
+                "could not be resolved."
+            )
 
         try:
             page = await self.fetcher.fetch(target)
-        except UnsafeUrlError as exc:
+        except (UnsafeUrlError, FetchError) as exc:
             source.status = ExtractionStatus.FAILED
             source.retrieval = RetrievalMethod.NONE
             source.note = "The page could not be reached."
@@ -326,7 +373,7 @@ class ArticleExtractor:
         reader = f"https://r.jina.ai/{quote(url, safe='')}"
         try:
             page = await self.fetcher.fetch(reader, accept="text/plain")
-        except UnsafeUrlError:
+        except (UnsafeUrlError, FetchError):
             return None
         text = page.text.strip()
         status = classify_body(text, http_status=page.status)

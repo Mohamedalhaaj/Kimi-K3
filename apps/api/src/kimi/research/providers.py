@@ -22,7 +22,7 @@ import structlog
 
 from kimi.research.dates import FEED_DATE_FIELDS, parse_datetime
 from kimi.research.models import ExtractionStatus, RetrievalMethod, SearchResults, Source
-from kimi.research.net import SafeFetcher, UnsafeUrlError
+from kimi.research.net import FetchError, SafeFetcher, UnsafeUrlError
 from kimi.research.query import FreshnessWindow
 from kimi.research.resilience import (
     CircuitBreaker,
@@ -87,7 +87,7 @@ class SearchProvider(ABC):
             sources = await with_backoff(
                 lambda: self._search(query, window, limit),
                 attempts=2,
-                retry_on=(UnsafeUrlError, OSError, ET.ParseError, ValueError),
+                retry_on=(FetchError, UnsafeUrlError, OSError, ET.ParseError, ValueError),
             )
             self._breaker.record_success()
             return SearchResults(
@@ -292,7 +292,7 @@ class DDGSProvider(SearchProvider):
         import asyncio
 
         try:
-            from ddgs import DDGS  # type: ignore[import-not-found]
+            from ddgs import DDGS
         except ImportError as exc:  # pragma: no cover - depends on environment
             raise RuntimeError("ddgs is not installed") from exc
 

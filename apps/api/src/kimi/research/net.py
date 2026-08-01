@@ -55,7 +55,15 @@ USER_AGENT: Final = (
 
 
 class UnsafeUrlError(Exception):
-    """The URL is not allowed to be fetched. The reason is safe to log."""
+    """The URL is not ALLOWED to be fetched. The reason is safe to log."""
+
+
+class FetchError(Exception):
+    """The URL was allowed but could not be retrieved.
+
+    Kept distinct from UnsafeUrlError so a network blip is never reported or
+    logged as a security-policy rejection.
+    """
 
 
 @dataclass(slots=True)
@@ -260,7 +268,7 @@ class SafeFetcher:
                     if response.status_code in (301, 302, 303, 307, 308):
                         location = response.headers.get("location")
                         if not location:
-                            raise UnsafeUrlError("redirect without a location")
+                            raise FetchError("redirect without a location")
                         redirects.append(current)
                         current = _join(current, location)
                         continue
@@ -289,9 +297,9 @@ class SafeFetcher:
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 # Never surface the raw transport message: it embeds internal
                 # hostnames and ports.
-                raise UnsafeUrlError(f"could not fetch {target.hostname}") from exc
+                raise FetchError(f"could not fetch {target.hostname}") from exc
 
-        raise UnsafeUrlError("too many redirects")
+        raise FetchError("too many redirects")
 
 
 def _join(base: str, location: str) -> str:
