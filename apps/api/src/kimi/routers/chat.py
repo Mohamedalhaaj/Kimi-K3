@@ -42,10 +42,29 @@ from kimi.services.context import (
     build_context,
     estimate_tokens,
 )
+from kimi.services.toolrouter import ResearchMode, route
+from kimi.tools.base import ToolInvocation, ToolStatus
+from kimi.tools.registry import ToolEngine
 
 log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+_tool_engine = ToolEngine()
+
+
+def _format_deterministic(tool_id: str, invocation: ToolInvocation) -> str:
+    """Render a deterministic tool's result as the assistant's answer.
+
+    Written here rather than by the model: that is the whole point of a
+    deterministic tool.
+    """
+    if invocation.error:
+        return ""
+    result = invocation.result or {}
+    if tool_id == "calculator":
+        return f"{result.get('expression', '')} = **{result.get('result', '')}**"
+    return str(result)
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -140,15 +159,6 @@ async def _generate(
         assistant_seq = next_seq + 1
         conversation_title = convo.title
 
-    built = build_context(
-        history=history,
-        system_prompt=DEFAULT_SYSTEM_PROMPT,
-        context_window=info.context_window,
-        mode=mode,  # type: ignore[arg-type]
-        supports_vision=info.supports(Capability.VISION),
-        pending_images=[i.data_url for i in payload.images],
-    )
-
     yield _sse(
         "start",
         {
@@ -157,13 +167,113 @@ async def _generate(
             "user_message_id": user_row.id,
             "model_id": model_id,
             "mode": mode,
-            "context": {
-                "included_messages": built.report.included_messages,
-                "dropped_messages": built.report.dropped_messages,
-                "estimated_prompt_tokens": built.report.estimated_prompt_tokens,
-                "budget_tokens": built.report.budget_tokens,
-                "dropped_images": built.report.dropped_images,
+        },
+    )
+
+    # ---- tools ---------------------------------------------------------
+    # The router is deterministic: choosing a tool never costs a token.
+    plan = route(payload.content, research=ResearchMode(payload.research))
+    tool_payload: dict[str, Any] | None = None
+    tool_context_block = ""
+    citations: list[dict[str, Any]] = []
+
+    if plan.tool_id:
+        yield _sse(
+            "tool",
+            {
+                "status": str(ToolStatus.RUNNING),
+                "tool_id": plan.tool_id,
+                "arguments": plan.arguments,
+                "reason": plan.reason,
             },
+        )
+        invocation = await _tool_engine.execute(
+            plan.tool_id, plan.arguments, conversation_id=payload.conversation_id
+        )
+        tool_payload = invocation.to_payload()
+        yield _sse("tool", tool_payload)
+
+        result = invocation.result or {}
+        if invocation.status.is_terminal and invocation.error is None:
+            tool_context_block = str(result.get("prompt_block") or "")
+            raw_sources = result.get("sources")
+            if isinstance(raw_sources, list):
+                citations = [s for s in raw_sources if isinstance(s, dict)]
+                if citations:
+                    yield _sse("sources", {"sources": citations})
+
+        # A deterministic tool's output IS the answer. Persist it and stop —
+        # no provider call, no tokens. This is the behaviour the prototype
+        # achieved by monkeypatching the OpenAI SDK's Completions class.
+        if plan.deterministic:
+            text = _format_deterministic(plan.tool_id, invocation)
+            async with sessionmaker() as session:
+                session.add(
+                    DbMessage(
+                        conversation_id=payload.conversation_id,
+                        seq=assistant_seq,
+                        role="assistant",
+                        content=text,
+                        model_id=None,
+                        usage=None,
+                        timing={
+                            "first_token_ms": None,
+                            "total_ms": (time.perf_counter() - started) * 1000,
+                            "tool_ms": invocation.duration_ms,
+                        },
+                        error=invocation.error,
+                        tool=tool_payload,
+                    )
+                )
+                convo = await session.get(Conversation, payload.conversation_id)
+                if convo is not None:
+                    convo.updated_at = utcnow()
+                await session.commit()
+
+            if text:
+                yield _sse("delta", {"text": text})
+            if invocation.error:
+                yield _sse("error", invocation.error)
+            yield _sse(
+                "done",
+                {
+                    "finish_reason": "tool",
+                    "usage": None,
+                    "timing": {
+                        "first_token_ms": None,
+                        "total_ms": (time.perf_counter() - started) * 1000,
+                        "tool_ms": round(invocation.duration_ms, 1),
+                    },
+                    "model_called": False,
+                    "assistant_seq": assistant_seq,
+                },
+            )
+            return
+
+    # Tool output is appended as a separate, clearly-fenced turn rather than
+    # concatenated into the user's own message, so the model can tell the
+    # user's words apart from retrieved data.
+    system_prompt = DEFAULT_SYSTEM_PROMPT
+    if tool_context_block:
+        system_prompt = f"{DEFAULT_SYSTEM_PROMPT}\n\n{tool_context_block}"
+
+    built = build_context(
+        history=history,
+        system_prompt=system_prompt,
+        context_window=info.context_window,
+        mode=mode,  # type: ignore[arg-type]
+        supports_vision=info.supports(Capability.VISION),
+        pending_images=[i.data_url for i in payload.images],
+    )
+
+    yield _sse(
+        "context",
+        {
+            "included_messages": built.report.included_messages,
+            "dropped_messages": built.report.dropped_messages,
+            "estimated_prompt_tokens": built.report.estimated_prompt_tokens,
+            "budget_tokens": built.report.budget_tokens,
+            "dropped_images": built.report.dropped_images,
         },
     )
 
@@ -254,6 +364,8 @@ async def _generate(
                         usage=usage,
                         timing=timing,
                         error=error_payload,
+                        tool=tool_payload,
+                        citations=citations or None,
                     )
                 )
                 convo = await session.get(Conversation, payload.conversation_id)
@@ -274,5 +386,8 @@ async def _generate(
             "timing": timing,
             "estimated_output_tokens": estimate_tokens("".join(chunks)),
             "assistant_seq": assistant_seq,
+            "model_called": True,
+            "tool_ms": (tool_payload or {}).get("duration_ms"),
+            "citations": len(citations),
         },
     )

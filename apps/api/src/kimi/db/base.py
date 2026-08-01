@@ -111,6 +111,10 @@ class Message(Base, TimestampMixin):
     timing: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     #: Structured error payload when the turn failed; keeps partial content.
     error: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    #: The tool invocation record for this turn, if a tool ran.
+    tool: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    #: Numbered sources backing the answer, in citation order.
+    citations: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
 

@@ -135,8 +135,10 @@ async def test_images_are_refused_loudly_not_dropped_silently(
     assert warning["code"] == "unsupported_capability"
     assert "cannot read images" in warning["message"]
 
-    start = next(d for e, d in events if e == "start")
-    assert start["context"]["dropped_images"] == 1
+    # Context is reported in its own frame after the tool phase, because tool
+    # output changes what fits in the prompt.
+    context = next(d for e, d in events if e == "context")
+    assert context["dropped_images"] == 1
     # The image must not have reached the provider.
     assert all(not m.images for m in provider.calls[0]["messages"])  # type: ignore[union-attr]
 

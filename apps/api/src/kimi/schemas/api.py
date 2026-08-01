@@ -8,6 +8,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 ChatMode = Literal["fast", "balanced", "deep"]
+ResearchMode = Literal["off", "auto", "always"]
 
 
 class ORMModel(BaseModel):
@@ -53,6 +54,8 @@ class MessageOut(ORMModel):
     usage: dict[str, Any] | None
     timing: dict[str, Any] | None
     error: dict[str, Any] | None
+    tool: dict[str, Any] | None = None
+    citations: list[dict[str, Any]] | None = None
     created_at: datetime
 
 
@@ -87,6 +90,7 @@ class ChatRequest(BaseModel):
     model_id: str | None = None
     mode: ChatMode | None = None
     images: Annotated[list[ImageIn], Field(max_length=8)] = []
+    research: ResearchMode = "auto"
 
 
 class ErrorOut(BaseModel):
