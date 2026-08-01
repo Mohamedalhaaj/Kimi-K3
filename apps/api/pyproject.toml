@@ -1,0 +1,97 @@
+[project]
+name = "kimi-api"
+version = "2.0.0"
+description = "Kimi Workspace 2 — FastAPI backend"
+requires-python = ">=3.13,<3.15"
+dependencies = [
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.52.0",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.14.2",
+    "sqlalchemy[asyncio]>=2.0.44",
+    "alembic>=1.18.5",
+    "aiosqlite>=0.21.0",
+    "httpx>=0.28.1",
+    "structlog>=26.1.0",
+    "python-multipart>=0.0.20",
+    # DuckDuckGo search adapter. Imported lazily so the app still runs if it
+    # is uninstallable in a given environment.
+    "ddgs>=9.0",
+    # Document parsing. Deliberately no pandas: the stdlib csv module gives a
+    # true row count cheaply, which is the audited CSV defect.
+    "pypdf>=5.1",
+    "python-docx>=1.1",
+    "python-pptx>=1.0",
+    "openpyxl>=3.1",
+    "Pillow>=11.0",
+]
+
+[project.optional-dependencies]
+postgres = ["asyncpg>=0.30.0"]
+# OCR is optional: the app detects scanned PDFs and says so when it is absent,
+# rather than silently returning empty text.
+ocr = ["pytesseract>=0.3.13", "pypdfium2>=4.30"]
+# Local browser agent. Optional: the tool degrades to "unavailable"
+# with an actionable message when Playwright or its browsers are absent.
+browser = ["playwright>=1.62"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.14.0",
+    "mypy>=1.18.0",
+    "respx>=0.22.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kimi"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# "." makes `tests` importable as a package. Without it, `uv run pytest`
+# fails where `python -m pytest` succeeds: the module form inserts the CWD into
+# sys.path and the console-script form does not. CI uses the script form, so
+# this discrepancy is exactly what broke the build.
+pythonpath = ["src", "."]
+addopts = "-q --strict-markers"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "S", "RUF"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B"]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["src"]
+mypy_path = "src"
+explicit_package_bases = true
+strict = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+plugins = []
+
+[[tool.mypy.overrides]]
+module = [
+    "aiosqlite.*",
+    "openpyxl.*",
+    # Optional extras, imported lazily so the app runs without them.
+    "ddgs.*",
+    "pytesseract.*",
+    "pypdfium2.*",
+    "playwright.*",
+]
+ignore_missing_imports = true

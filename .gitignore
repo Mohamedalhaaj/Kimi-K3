@@ -1,6 +1,56 @@
+# ---- secrets -------------------------------------------------------------
 .env
+.env.*
+!.env.example
+secrets.toml
+.streamlit/secrets.toml
+.streamlit/*.local.toml
+
+# ---- python --------------------------------------------------------------
 .venv/
+venv/
+env/
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# ---- node / next ---------------------------------------------------------
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+.eslintcache
+
+# ---- local data (conversations, uploads, browser profile) ----------------
+data/
+uploads/
+browser-profile/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# ---- generated exports (may contain private answers & sources) -----------
+kimi-conversation.md
+kimi-conversation.json
+kimi-response.docx
+artifacts/
+
+# ---- test / build output -------------------------------------------------
+playwright-report/
+test-results/
+blob-report/
+coverage/
+
+# ---- os ------------------------------------------------------------------
 .DS_Store
-.streamlit/secrets.toml
+Thumbs.db
+
+# local run artifacts
+.local/
