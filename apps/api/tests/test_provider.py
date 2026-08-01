@@ -13,7 +13,7 @@ from kimi.errors import (
     ModelTimeoutError,
     UnsupportedCapabilityError,
 )
-from kimi.providers.base import ImagePart, Message, StreamDone, TextDelta
+from kimi.providers.base import Capability, ImagePart, Message, StreamDone, TextDelta
 from kimi.providers.tokenrouter import TokenRouterProvider, model_info
 
 BASE = "https://api.example.test/v1"
@@ -140,7 +140,7 @@ async def test_image_to_text_only_model_is_refused_before_the_request() -> None:
         role="user", content="what is this", images=[ImagePart(data_url="data:image/png;base64,x")]
     )
     with pytest.raises(UnsupportedCapabilityError):
-        await collect(make(), messages=[msg], model="moonshotai/kimi-k3-free")
+        await collect(make(), messages=[msg], model="some/text-only-model")
     # Nothing was sent — the refusal happens before any network call.
     assert route.call_count == 0
 
@@ -193,3 +193,35 @@ def test_unknown_model_never_claims_vision() -> None:
 def test_empty_api_key_is_rejected_at_construction() -> None:
     with pytest.raises(ModelAuthError):
         TokenRouterProvider(api_key="   ", base_url=BASE)
+
+
+def test_default_model_advertises_vision() -> None:
+    """Verified against the live endpoint on 2026-08-01.
+
+    This was wrong in the first cut: kimi-k3-free was listed as text-only on
+    assumption, so the UI refused every image attachment for the only model the
+    key can use. Posting an image_url part returns 200 and the model answers
+    about the image, so the capability is real and the registry must say so.
+    """
+    info = model_info("moonshotai/kimi-k3-free")
+    assert info.supports(Capability.VISION)
+    assert info.supports(Capability.TEXT)
+
+
+def test_vision_model_receives_images_end_to_end() -> None:
+    """The provider must not refuse an image for a vision-capable model."""
+    provider = make()
+    payload = provider._build_payload(
+        messages=[
+            Message(
+                role="user",
+                content="describe",
+                images=[ImagePart(data_url="data:image/png;base64,x")],
+            )
+        ],
+        model="moonshotai/kimi-k3-free",
+        temperature=0.7,
+        max_tokens=100,
+    )
+    parts = payload["messages"][0]["content"]
+    assert {p["type"] for p in parts} == {"text", "image_url"}

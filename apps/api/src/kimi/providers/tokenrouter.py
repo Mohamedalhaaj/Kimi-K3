@@ -48,12 +48,19 @@ _TEXT_ONLY = frozenset({Capability.TEXT})
 _TEXT_TOOLS = frozenset({Capability.TEXT, Capability.TOOLS})
 _MULTIMODAL = frozenset({Capability.TEXT, Capability.TOOLS, Capability.VISION})
 
-#: Known models. Anything not listed falls back to :data:`_FALLBACK_MODEL`,
+#: Known models. Anything not listed falls back to :data:`_fallback_model`,
 #: which claims only TEXT — we never *assume* a capability we cannot confirm.
+#:
+#: VERIFIED entries were checked against the live endpoint. kimi-k3-free was
+#: originally listed here as text-only on assumption, which silently blocked a
+#: capability it actually has: posting an image_url part returns 200 and the
+#: model describes the image correctly. Do not downgrade an entry without
+#: re-testing it — an assumption is what caused the bug.
 _KNOWN: dict[str, ModelInfo] = {
     m.id: m
     for m in (
-        ModelInfo("moonshotai/kimi-k3-free", "Kimi K3 (free)", _TEXT_TOOLS, 128_000),
+        # VERIFIED 2026-08-01: accepts image_url parts and answers about them.
+        ModelInfo("moonshotai/kimi-k3-free", "Kimi K3 (free)", _MULTIMODAL, 128_000),
         ModelInfo("moonshotai/kimi-k2-thinking", "Kimi K2 Thinking", _TEXT_TOOLS, 256_000),
         ModelInfo("openai/gpt-4o-mini", "GPT-4o mini", _MULTIMODAL, 128_000),
         ModelInfo("openai/gpt-4o", "GPT-4o", _MULTIMODAL, 128_000),
