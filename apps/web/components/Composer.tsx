@@ -10,6 +10,8 @@ import {
   isSupportedImage,
   prepareImage,
 } from "@/lib/images";
+import type { AttachedFile } from "@/lib/types";
+import { AttachmentTray } from "./Attachments";
 
 const MAX_ROWS_PX = 216; // ~9 rows before the textarea starts scrolling
 
@@ -25,6 +27,10 @@ interface Props {
   /** False when the selected model has no vision capability. */
   visionSupported: boolean;
   onImageError: (message: string) => void;
+  files: AttachedFile[];
+  uploading: number;
+  onFiles: (files: File[]) => void;
+  onRemoveFile: (id: string) => void;
 }
 
 export function Composer({
@@ -38,6 +44,10 @@ export function Composer({
   onImagesChange,
   visionSupported,
   onImageError,
+  files,
+  uploading,
+  onFiles,
+  onRemoveFile,
 }: Props) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -54,15 +64,11 @@ export function Composer({
   }, [value]);
 
   const addFiles = useCallback(
-    async (files: File[]) => {
-      const usable = files.filter(isSupportedImage);
-      const rejected = files.length - usable.length;
-      if (rejected > 0) {
-        // Documents are not silently ignored — say what happened.
-        onImageError(
-          `${rejected} file(s) were not attached: only images are supported for now.`,
-        );
-      }
+    async (incoming: File[]) => {
+      const usable = incoming.filter(isSupportedImage);
+      const documents = incoming.filter((f) => !isSupportedImage(f));
+      // Documents go to the server-side parser; images stay inline.
+      if (documents.length) onFiles(documents);
       if (!usable.length) return;
 
       const room = MAX_IMAGES - images.length;
@@ -84,11 +90,14 @@ export function Composer({
       }
       if (prepared.length) onImagesChange([...images, ...prepared]);
     },
-    [images, onImagesChange, onImageError],
+    [images, onImagesChange, onImageError, onFiles],
   );
 
   const canSend =
-    (value.trim().length > 0 || images.length > 0) && !streaming && !disabled;
+    (value.trim().length > 0 || images.length > 0 || files.length > 0) &&
+    !streaming &&
+    !disabled &&
+    uploading === 0;
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     // Enter sends; Shift+Enter is a newline. IME composition must never send.
@@ -118,6 +127,8 @@ export function Composer({
       }}
     >
       <div className="measure mx-auto">
+        <AttachmentTray files={files} onRemove={onRemoveFile} uploading={uploading} />
+
         {images.length > 0 && (
           <ul className="mb-2 flex flex-wrap gap-2" aria-label="Attached images">
             {images.map((img) => (
@@ -162,7 +173,7 @@ export function Composer({
           <input
             ref={fileRef}
             type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif,image/avif"
+            accept="image/png,image/jpeg,image/webp,image/gif,image/avif,.pdf,.docx,.pptx,.xlsx,.xlsm,.csv,.txt,.md,.json,.yaml,.yml,.xml,.html,.py,.js,.ts,.srt,.vtt"
             multiple
             className="sr-only"
             onChange={(e) => {
@@ -173,9 +184,9 @@ export function Composer({
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
-            disabled={disabled || images.length >= MAX_IMAGES}
-            aria-label="Attach an image"
-            title="Attach an image"
+            disabled={disabled}
+            aria-label="Attach a file"
+            title="Attach a PDF, Word, PowerPoint, Excel, CSV, text file or image"
             className="flex size-9 shrink-0 items-center justify-center rounded-control text-fg-muted transition-colors hover:bg-bg-hover hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
           >
             <PaperclipIcon className="size-4" />
@@ -200,7 +211,7 @@ export function Composer({
                 void addFiles(files);
               }
             }}
-            placeholder="Ask anything, paste a link, or attach an image…"
+            placeholder="Ask anything, paste a link, or attach a document…"
             aria-describedby="composer-hint"
             className="max-h-[216px] flex-1 resize-none bg-transparent px-2 py-1.5 text-md leading-relaxed text-fg outline-none disabled:opacity-60"
           />
@@ -228,7 +239,7 @@ export function Composer({
         </div>
 
         <p id="composer-hint" className="mt-2 px-1 text-2xs text-fg-subtle">
-          Enter to send · Shift+Enter for a new line · drag, paste or attach images
+          Enter to send · Shift+Enter for a new line · PDF, Word, PowerPoint, Excel, CSV, text and images
         </p>
       </div>
     </div>

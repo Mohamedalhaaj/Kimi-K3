@@ -1,4 +1,5 @@
 import type {
+  AttachedFile,
   ChatMode,
   Conversation,
   ConversationDetail,
@@ -90,7 +91,53 @@ export const api = {
 
   models: () =>
     request<{ default: string; models: ModelInfo[] }>("/models"),
+
+  listFiles: (conversationId: string) =>
+    request<{ files: AttachedFile[] }>(
+      `/api/files?conversation_id=${encodeURIComponent(conversationId)}`,
+    ),
+
+  deleteFile: (fileId: string) =>
+    request<void>(`/api/files/${fileId}`, { method: "DELETE" }),
 };
+
+/**
+ * Upload documents. Sent as multipart rather than base64 in JSON, so a 20 MB
+ * PDF does not become 27 MB of string on the wire.
+ */
+export async function uploadFiles(
+  conversationId: string,
+  files: File[],
+): Promise<AttachedFile[]> {
+  const form = new FormData();
+  for (const file of files) form.append("files", file, file.name);
+
+  let res: Response;
+  try {
+    res = await fetch(
+      `${BASE}/api/files?conversation_id=${encodeURIComponent(conversationId)}`,
+      { method: "POST", body: form },
+    );
+  } catch {
+    throw new ApiRequestError(
+      "Cannot reach the Kimi API. Is the backend running on port 8787?",
+      "network",
+      true,
+    );
+  }
+
+  if (!res.ok) {
+    let message = `Upload failed (${res.status}).`;
+    try {
+      const body = await res.json();
+      message = body?.error?.message ?? message;
+    } catch {
+      /* keep the status-based fallback */
+    }
+    throw new ApiRequestError(message, "upload_failed");
+  }
+  return ((await res.json()) as { files: AttachedFile[] }).files;
+}
 
 /**
  * Stream a chat turn.
@@ -108,6 +155,7 @@ export async function* streamChat(
     mode?: ChatMode;
     research?: ResearchMode;
     images?: { data_url: string }[];
+    document_ids?: string[];
   },
   signal: AbortSignal,
 ): AsyncGenerator<StreamEvent> {

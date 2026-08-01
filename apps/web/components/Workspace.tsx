@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiRequestError, streamChat } from "@/lib/api";
+import { api, ApiRequestError, streamChat, uploadFiles } from "@/lib/api";
 import type {
+  AttachedFile,
   ChatMode,
   Citation,
   Conversation,
@@ -56,6 +57,8 @@ export function Workspace() {
   const [mode, setMode] = useState<ChatMode>("balanced");
   const [research, setResearch] = useState<ResearchMode>("auto");
   const [images, setImages] = useState<PreparedImage[]>([]);
+  const [files, setFiles] = useState<AttachedFile[]>([]);
+  const [uploading, setUploading] = useState(0);
   const [theme, applyTheme] = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -96,12 +99,60 @@ export function Workspace() {
       });
   }, []);
 
+  /** Files are scoped to a conversation, so one must exist before uploading. */
+  const ensureConversation = useCallback(async (): Promise<string | null> => {
+    if (activeId) return activeId;
+    try {
+      const convo = await api.createConversation({ mode });
+      setActiveId(convo.id);
+      setConversations((c) => [convo, ...c]);
+      return convo.id;
+    } catch (e) {
+      setBanner(
+        e instanceof ApiRequestError ? e.message : "Could not start a conversation.",
+      );
+      return null;
+    }
+  }, [activeId, mode]);
+
+  const onFiles = useCallback(
+    async (incoming: File[]) => {
+      const cid = await ensureConversation();
+      if (!cid) return;
+      setUploading((n) => n + incoming.length);
+      try {
+        const parsed = await uploadFiles(cid, incoming);
+        setFiles((f) => [...f, ...parsed]);
+        // Surface anything unreadable immediately rather than at send time.
+        const bad = parsed.filter(
+          (p) => p.status !== "parsed" && p.status !== "partial",
+        );
+        if (bad.length) setBanner(bad[0].summary);
+      } catch (e) {
+        setBanner(e instanceof ApiRequestError ? e.message : "Upload failed.");
+      } finally {
+        setUploading((n) => Math.max(0, n - incoming.length));
+      }
+    },
+    [ensureConversation],
+  );
+
+  const onRemoveFile = useCallback((id: string) => {
+    setFiles((f) => f.filter((x) => x.id !== id));
+    void api.deleteFile(id).catch(() => {});
+  }, []);
+
   const openConversation = useCallback(async (id: string) => {
     setActiveId(id);
     setSidebarOpen(false);
     try {
       const detail = await api.getConversation(id);
       setMessages(detail.messages);
+      setFiles([]);
+      void api
+        .listFiles(id)
+        .then((r) => setFiles(r.files))
+        .catch(() => {});
       if (detail.model_id) setModelId(detail.model_id);
       if (detail.mode) setMode(detail.mode as ChatMode);
       stickToBottom.current = true;
@@ -142,7 +193,12 @@ export function Workspace() {
 
   // ---- send --------------------------------------------------------
   const send = useCallback(
-    async (text: string, conversationId: string, attach: PreparedImage[] = []) => {
+    async (
+      text: string,
+      conversationId: string,
+      attach: PreparedImage[] = [],
+      documentIds: string[] = [],
+    ) => {
       const controller = new AbortController();
       abortRef.current = controller;
       streamStartRef.current = performance.now();
@@ -178,6 +234,7 @@ export function Workspace() {
             mode,
             research,
             images: attach.map((i) => ({ data_url: i.dataUrl })),
+            document_ids: documentIds,
           },
           controller.signal,
         )) {
@@ -246,27 +303,18 @@ export function Workspace() {
 
   const onSubmit = useCallback(async () => {
     const text = draft.trim();
-    if ((!text && images.length === 0) || streaming) return;
+    if ((!text && images.length === 0 && files.length === 0) || streaming) return;
 
-    let id = activeId;
-    if (!id) {
-      try {
-        const convo = await api.createConversation({ mode });
-        id = convo.id;
-        setActiveId(id);
-        setConversations((c) => [convo, ...c]);
-      } catch (e) {
-        setBanner(
-          e instanceof ApiRequestError ? e.message : "Could not start a conversation.",
-        );
-        return;
-      }
-    }
+    const id = await ensureConversation();
+    if (!id) return;
+
     const attach = images;
+    const docIds = files.map((f) => f.id);
     setDraft("");
     setImages([]);
-    await send(text, id, attach);
-  }, [draft, images, streaming, activeId, mode, send]);
+    setFiles([]);
+    await send(text, id, attach, docIds);
+  }, [draft, images, files, streaming, ensureConversation, send]);
 
   const onStop = useCallback(() => {
     abortRef.current?.abort();
@@ -288,6 +336,8 @@ export function Workspace() {
     setActiveId(null);
     setMessages([]);
     setDraft("");
+    setImages([]);
+    setFiles([]);
     setSidebarOpen(false);
   }, [onStop]);
 
@@ -568,6 +618,10 @@ export function Workspace() {
           onImagesChange={setImages}
           visionSupported={!!activeModel?.capabilities.includes("vision")}
           onImageError={setBanner}
+          files={files}
+          uploading={uploading}
+          onFiles={(f) => void onFiles(f)}
+          onRemoveFile={onRemoveFile}
         />
       </main>
     </div>

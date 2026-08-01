@@ -125,6 +125,12 @@ export type StreamEvent =
       user_message_id: string;
       model_id: string;
       mode: ChatMode;
+      attachments?: {
+        id: string;
+        filename: string;
+        status: ParseStatus;
+        kind: DocumentKind;
+      }[];
     }
   | ({ type: "tool" } & ToolInvocation)
   | { type: "sources"; sources: Citation[] }
@@ -141,3 +147,33 @@ export type StreamEvent =
       model_called?: boolean;
       tool_ms?: number | null;
     };
+
+/** Mirrors kimi.files.models.ParseStatus. */
+export type ParseStatus =
+  | "parsed"
+  | "partial"
+  | "no_text_layer"
+  | "encrypted"
+  | "password_required"
+  | "unsupported"
+  | "too_large"
+  | "failed";
+
+export type DocumentKind =
+  | "pdf" | "docx" | "pptx" | "xlsx" | "csv" | "text" | "image" | "unknown";
+
+export interface AttachedFile {
+  id: string;
+  conversation_id: string;
+  filename: string;
+  kind: DocumentKind;
+  status: ParseStatus;
+  mime_type: string;
+  size_bytes: number;
+  summary: string;
+  metadata: Record<string, unknown>;
+  warnings: string[];
+  segment_count: number;
+  has_image: boolean;
+  created_at: string;
+}
