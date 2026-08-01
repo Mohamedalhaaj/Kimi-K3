@@ -81,5 +81,13 @@ disallow_untyped_defs = true
 plugins = []
 
 [[tool.mypy.overrides]]
-module = ["aiosqlite.*", "openpyxl.*", "ddgs.*", "pytesseract.*", "pypdfium2.*"]
+module = [
+    "aiosqlite.*",
+    "openpyxl.*",
+    # Optional extras, imported lazily so the app runs without them.
+    "ddgs.*",
+    "pytesseract.*",
+    "pypdfium2.*",
+    "playwright.*",
+]
 ignore_missing_imports = true

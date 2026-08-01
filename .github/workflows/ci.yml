@@ -30,6 +30,8 @@ jobs:
         run: uv run mypy
       - name: pytest
         run: uv run pytest -q
+      - name: Dependency audit
+        run: uvx pip-audit --progress-spinner off --strict
 
   web:
     name: Web — lint, types, contrast, build
@@ -53,6 +55,8 @@ jobs:
         run: npm run check:contrast
       - name: Production build
         run: npm run build
+      - name: Dependency audit
+        run: npm audit --omit=dev --audit-level=high
 
   secrets:
     name: No committed secrets
