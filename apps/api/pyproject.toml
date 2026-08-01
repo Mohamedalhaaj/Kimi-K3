@@ -31,6 +31,9 @@ postgres = ["asyncpg>=0.30.0"]
 # OCR is optional: the app detects scanned PDFs and says so when it is absent,
 # rather than silently returning empty text.
 ocr = ["pytesseract>=0.3.13", "pypdfium2>=4.30"]
+# Local browser agent. Optional: the tool degrades to "unavailable"
+# with an actionable message when Playwright or its browsers are absent.
+browser = ["playwright>=1.62"]
 
 [dependency-groups]
 dev = [

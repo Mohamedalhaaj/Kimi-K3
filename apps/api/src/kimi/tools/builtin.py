@@ -9,6 +9,7 @@ ordering enforced only by a comment.
 
 from __future__ import annotations
 
+from kimi.tools.browser import BROWSER_TOOLS
 from kimi.tools.calculator import CALCULATOR
 from kimi.tools.registry import registry
 from kimi.tools.web import NEWS_SEARCH, OPEN_PUBLIC_URL, READ_ARTICLE, WEB_SEARCH
@@ -21,7 +22,14 @@ def register_builtin_tools() -> None:
     global _REGISTERED
     if _REGISTERED:
         return
-    for spec in (CALCULATOR, OPEN_PUBLIC_URL, READ_ARTICLE, WEB_SEARCH, NEWS_SEARCH):
+    for spec in (
+        CALCULATOR,
+        OPEN_PUBLIC_URL,
+        READ_ARTICLE,
+        WEB_SEARCH,
+        NEWS_SEARCH,
+        *BROWSER_TOOLS,
+    ):
         if spec.id not in registry:
             registry.register(spec)
     _REGISTERED = True
