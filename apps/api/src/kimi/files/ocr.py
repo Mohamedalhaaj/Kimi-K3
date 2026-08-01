@@ -30,9 +30,18 @@ RENDER_DPI: Final = 200
 DEFAULT_LANGS: Final = "ara+eng"
 
 
-@lru_cache(maxsize=1)
+#: Only a POSITIVE result is cached. Caching the negative would let one
+#: transient failure — a half-finished reinstall, a momentarily missing PATH —
+#: disable OCR for the entire life of the process. Observed exactly once during
+#: development, immediately after `uv sync` replaced pytesseract mid-run.
+_OCR_READY = False
+
+
 def ocr_available() -> bool:
     """True when both the renderer and a working tesseract are present."""
+    global _OCR_READY
+    if _OCR_READY:
+        return True
     try:
         import pypdfium2  # noqa: F401
         import pytesseract
@@ -40,6 +49,7 @@ def ocr_available() -> bool:
         pytesseract.get_tesseract_version()
     except Exception:
         return False
+    _OCR_READY = True
     return True
 
 
