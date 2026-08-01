@@ -111,3 +111,9 @@ export const ChevronIcon = ({ className }: P) => (
     <path d="m4.5 6.5 3.5 3.5 3.5-3.5" />
   </svg>
 );
+
+export const PaperclipIcon = ({ className }: P) => (
+  <svg {...base} className={className}>
+    <path d="M12.4 7.6 8 12a2.4 2.4 0 0 1-3.4-3.4l4.6-4.6a1.6 1.6 0 0 1 2.3 2.3l-4.6 4.6a.8.8 0 0 1-1.1-1.1l4.2-4.2" />
+  </svg>
+);

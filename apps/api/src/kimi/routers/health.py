@@ -11,11 +11,14 @@ from __future__ import annotations
 
 from typing import Any
 
+import structlog
 from fastapi import APIRouter, Response, status
 from sqlalchemy import text
 
 from kimi.deps import SessionDep, SettingsDep
-from kimi.providers.tokenrouter import known_models
+from kimi.providers.tokenrouter import TokenRouterProvider, known_models
+
+log = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["health"])
 
@@ -53,8 +56,38 @@ async def list_models(settings: SettingsDep) -> dict[str, Any]:
     This reads the static capability registry and does not require a credential,
     so the model picker still renders before the key is configured.
     """
+    models = known_models()
+    source = "registry"
+
+    # Prefer the provider's own list so the picker never offers a model this
+    # key cannot call. Falling back is safe: the request will surface a clear
+    # auth error rather than a silent failure.
+    if settings.has_model_provider and settings.tokenrouter_api_key is not None:
+        provider = TokenRouterProvider(
+            api_key=settings.tokenrouter_api_key.get_secret_value(),
+            base_url=settings.tokenrouter_base_url,
+            request_timeout_s=10.0,
+            max_retries=0,
+        )
+        try:
+            available = await provider.fetch_available_models()
+            if available:
+                models = tuple(available)
+                source = "provider"
+        except Exception as exc:
+            log.warning("models.discovery_failed", exc_type=type(exc).__name__)
+        finally:
+            await provider.aclose()
+
+    ids = {m.id for m in models}
+    default = (
+        settings.default_model
+        if settings.default_model in ids
+        else next(iter(m.id for m in models), settings.default_model)
+    )
     return {
-        "default": settings.default_model,
+        "default": default,
+        "source": source,
         "models": [
             {
                 "id": m.id,
@@ -62,6 +95,6 @@ async def list_models(settings: SettingsDep) -> dict[str, Any]:
                 "capabilities": sorted(str(c) for c in m.capabilities),
                 "context_window": m.context_window,
             }
-            for m in known_models()
+            for m in models
         ],
     }

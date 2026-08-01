@@ -126,6 +126,35 @@ class TokenRouterProvider(ChatProvider):
     def list_models(self) -> Sequence[ModelInfo]:
         return tuple(_KNOWN.values())
 
+    async def fetch_available_models(self) -> list[ModelInfo]:
+        """Ask the provider which models this key can actually use.
+
+        The static registry describes capabilities, but it cannot know what a
+        given key is entitled to. Listing a model the user cannot call means
+        advertising a feature that does not exist, so the picker is built from
+        this list and the registry is used only to describe what is on it.
+        """
+        client = await self._get_client()
+        response = await client.get(
+            f"{self._base_url}/models",
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            timeout=self._timeout,
+        )
+        if response.status_code >= 400:
+            self._raise_for_status(response.status_code, response.text)
+
+        payload = response.json()
+        rows = payload.get("data") if isinstance(payload, dict) else payload
+        if not isinstance(rows, list):
+            raise ModelBadResponseError(detail="model list was not a list")
+
+        models: list[ModelInfo] = []
+        for row in rows:
+            model_id = row.get("id") if isinstance(row, dict) else row
+            if isinstance(model_id, str) and model_id:
+                models.append(model_info(model_id))
+        return models
+
     # -- request building -----------------------------------------------
 
     def _build_payload(

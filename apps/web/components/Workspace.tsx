@@ -11,6 +11,7 @@ import type {
   ResearchMode,
 } from "@/lib/types";
 import { useTheme } from "@/lib/useTheme";
+import type { PreparedImage } from "@/lib/images";
 import { Composer } from "./Composer";
 import { MessageView, PendingIndicator } from "./MessageView";
 import { Sidebar } from "./Sidebar";
@@ -54,6 +55,7 @@ export function Workspace() {
   const [modelId, setModelId] = useState<string>("");
   const [mode, setMode] = useState<ChatMode>("balanced");
   const [research, setResearch] = useState<ResearchMode>("auto");
+  const [images, setImages] = useState<PreparedImage[]>([]);
   const [theme, applyTheme] = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -140,7 +142,7 @@ export function Workspace() {
 
   // ---- send --------------------------------------------------------
   const send = useCallback(
-    async (text: string, conversationId: string) => {
+    async (text: string, conversationId: string, attach: PreparedImage[] = []) => {
       const controller = new AbortController();
       abortRef.current = controller;
       streamStartRef.current = performance.now();
@@ -175,6 +177,7 @@ export function Workspace() {
             model_id: modelId,
             mode,
             research,
+            images: attach.map((i) => ({ data_url: i.dataUrl })),
           },
           controller.signal,
         )) {
@@ -243,7 +246,7 @@ export function Workspace() {
 
   const onSubmit = useCallback(async () => {
     const text = draft.trim();
-    if (!text || streaming) return;
+    if ((!text && images.length === 0) || streaming) return;
 
     let id = activeId;
     if (!id) {
@@ -259,9 +262,11 @@ export function Workspace() {
         return;
       }
     }
+    const attach = images;
     setDraft("");
-    await send(text, id);
-  }, [draft, streaming, activeId, mode, send]);
+    setImages([]);
+    await send(text, id, attach);
+  }, [draft, images, streaming, activeId, mode, send]);
 
   const onStop = useCallback(() => {
     abortRef.current?.abort();
@@ -559,6 +564,10 @@ export function Workspace() {
           onSubmit={() => void onSubmit()}
           onStop={onStop}
           streaming={streaming}
+          images={images}
+          onImagesChange={setImages}
+          visionSupported={!!activeModel?.capabilities.includes("vision")}
+          onImageError={setBanner}
         />
       </main>
     </div>
