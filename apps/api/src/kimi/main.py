@@ -17,7 +17,8 @@ from kimi.config import Settings, get_settings
 from kimi.db.session import create_all, dispose, get_engine
 from kimi.errors import ErrorCode, KimiError
 from kimi.logging import configure_logging
-from kimi.routers import chat, conversations, health
+from kimi.routers import chat, conversations, health, tools
+from kimi.tools.builtin import register_builtin_tools
 
 log = structlog.get_logger(__name__)
 
@@ -130,9 +131,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             payload["detail"] = f"{type(exc).__name__}: {exc}"
         return JSONResponse(status_code=500, content={"error": payload})
 
+    register_builtin_tools()
+
     app.include_router(health.router)
     app.include_router(conversations.router, prefix="/api")
     app.include_router(chat.router, prefix="/api")
+    app.include_router(tools.router, prefix="/api")
     return app
 
 
