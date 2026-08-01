@@ -32,7 +32,21 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT }} />
       </head>
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+      {/*
+        suppressHydrationWarning on <body> as well as <html>: browser extensions
+        (antivirus, form fillers, page annotators) routinely stamp attributes
+        such as `bis_register` or `__processed_<uuid>__` onto <body> before
+        React hydrates, which React then reports as a mismatch we did not cause
+        and cannot prevent.
+
+        This is narrow on purpose — the flag suppresses warnings for THIS
+        element's own attributes only, not for its subtree, so a genuine
+        mismatch inside the app is still reported.
+      */}
+      <body
+        suppressHydrationWarning
+        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+      >
         {children}
       </body>
     </html>
