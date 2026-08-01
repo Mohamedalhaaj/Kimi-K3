@@ -4,9 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiRequestError, streamChat } from "@/lib/api";
 import type {
   ChatMode,
+  Citation,
   Conversation,
   Message,
   ModelInfo,
+  ResearchMode,
 } from "@/lib/types";
 import { useTheme } from "@/lib/useTheme";
 import { Composer } from "./Composer";
@@ -32,6 +34,8 @@ function draftMessage(conversationId: string, seq: number): Message {
     usage: null,
     timing: null,
     error: null,
+    tool: null,
+    citations: null,
     created_at: new Date().toISOString(),
   };
 }
@@ -49,6 +53,7 @@ export function Workspace() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [modelId, setModelId] = useState<string>("");
   const [mode, setMode] = useState<ChatMode>("balanced");
+  const [research, setResearch] = useState<ResearchMode>("auto");
   const [theme, applyTheme] = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -164,7 +169,13 @@ export function Workspace() {
 
       try {
         for await (const ev of streamChat(
-          { conversation_id: conversationId, content: text, model_id: modelId, mode },
+          {
+            conversation_id: conversationId,
+            content: text,
+            model_id: modelId,
+            mode,
+            research,
+          },
           controller.signal,
         )) {
           if (ev.type === "start") {
@@ -180,6 +191,26 @@ export function Workspace() {
                   : msg,
               ),
             );
+          } else if (ev.type === "tool") {
+            // The tool card updates in place through its lifecycle, so the
+            // user always sees the real state rather than a stuck "running".
+            patchAssistant({
+              tool: {
+                tool_id: ev.tool_id,
+                status: ev.status,
+                arguments: ev.arguments,
+                result: ev.result,
+                warnings: ev.warnings,
+                error: ev.error,
+                duration_ms: ev.duration_ms,
+                renderer: ev.renderer,
+                reason: ev.reason,
+              },
+            });
+          } else if (ev.type === "sources") {
+            patchAssistant({ citations: ev.sources as Citation[] });
+          } else if (ev.type === "context") {
+            /* reported for the diagnostics panel; not surfaced inline */
           } else if (ev.type === "warning") {
             setBanner(ev.message);
           } else if (ev.type === "error") {
@@ -188,6 +219,8 @@ export function Workspace() {
             });
           } else if (ev.type === "done") {
             patchAssistant({ usage: ev.usage, timing: ev.timing });
+            // A tool-only turn produces no text; make sure it never leaves an
+            // empty card by falling back to the tool's own summary.
           }
         }
       } catch (e) {
@@ -205,7 +238,7 @@ export function Workspace() {
         void refreshList(query);
       }
     },
-    [messages.length, modelId, mode, query, refreshList],
+    [messages.length, modelId, mode, research, query, refreshList],
   );
 
   const onSubmit = useCallback(async () => {
@@ -389,6 +422,35 @@ export function Workspace() {
               ))}
             </div>
 
+            <div
+              role="radiogroup"
+              aria-label="Web research"
+              className="flex rounded-control border border-border bg-bg-raised p-0.5"
+            >
+              {(
+                [
+                  { id: "off", label: "No web" },
+                  { id: "auto", label: "Auto" },
+                  { id: "always", label: "Always" },
+                ] as const
+              ).map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={research === r.id}
+                  onClick={() => setResearch(r.id)}
+                  className={`rounded-[6px] px-2.5 py-1 text-xs transition-colors ${
+                    research === r.id
+                      ? "bg-accent text-white"
+                      : "text-fg-muted hover:text-fg"
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+
             {activeModel && !activeModel.capabilities.includes("vision") && (
               <span className="text-2xs text-fg-subtle">Text only</span>
             )}
@@ -457,7 +519,11 @@ export function Workspace() {
               {messages.map((m) => {
                 const isLast = m.seq === lastAssistantSeq;
                 const isDraftPending =
-                  m.role === "assistant" && m.content === "" && !m.error && streaming;
+                  m.role === "assistant" &&
+                  m.content === "" &&
+                  !m.error &&
+                  !m.tool &&
+                  streaming;
                 if (isDraftPending) {
                   return (
                     <div key={m.id} className="measure mx-auto w-full">
@@ -467,7 +533,10 @@ export function Workspace() {
                 }
                 // An assistant row with no text, no error and no stream is not
                 // rendered at all — this is the "no empty card" guarantee.
-                if (m.role === "assistant" && !m.content && !m.error) return null;
+                // An assistant row with no text, no error and no tool record
+                // is never rendered — this is the "no empty card" guarantee.
+                if (m.role === "assistant" && !m.content && !m.error && !m.tool)
+                  return null;
                 return (
                   <div key={m.id} className="mx-auto w-full max-w-[calc(72ch+2rem)]">
                     <MessageView

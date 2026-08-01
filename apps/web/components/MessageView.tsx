@@ -4,17 +4,23 @@ import { useState } from "react";
 import type { Message } from "@/lib/types";
 import { detectDirection } from "@/lib/direction";
 import { AlertIcon, CheckIcon, CopyIcon, RefreshIcon } from "./icons";
+import { CitedText, Sources } from "./Sources";
+import { ToolActivity } from "./ToolActivity";
 
 function Meta({ message }: { message: Message }) {
   const bits: string[] = [];
   const ttft = message.timing?.first_token_ms;
   const total = message.timing?.total_ms;
+  const toolMs = message.timing?.tool_ms;
 
-  // Only ever render a number that was actually measured.
+  // Only ever render a number that was actually measured, and keep tool time
+  // distinct from model time — a deterministic answer is never "0.0s".
+  if (typeof toolMs === "number") bits.push(`${(toolMs / 1000).toFixed(1)}s tool`);
   if (typeof ttft === "number") bits.push(`${(ttft / 1000).toFixed(1)}s to first token`);
   if (typeof total === "number") bits.push(`${(total / 1000).toFixed(1)}s total`);
   if (message.usage?.total_tokens) bits.push(`${message.usage.total_tokens} tokens`);
   if (message.model_id) bits.push(message.model_id);
+  else if (message.tool) bits.push("no model call");
 
   if (!bits.length) return null;
   return (
@@ -72,17 +78,21 @@ export function MessageView({ message, isStreaming, onRegenerate }: Props) {
   const hasText = message.content.length > 0;
   const err = message.error;
 
+  const citations = message.citations ?? [];
+
   return (
     <article className="animate-message-in" aria-label="Assistant message">
+      {message.tool && <ToolActivity tool={message.tool} />}
+
       {hasText && (
-        <div
+        <CitedText
+          text={message.content}
+          sources={citations}
           dir={dir}
           className={`measure whitespace-pre-wrap break-words text-md leading-relaxed text-fg ${
             isStreaming ? "streaming-caret" : ""
           }`}
-        >
-          {message.content}
-        </div>
+        />
       )}
 
       {/* An error never replaces the text the user already watched arrive;
@@ -133,6 +143,8 @@ export function MessageView({ message, isStreaming, onRegenerate }: Props) {
           )}
         </div>
       )}
+
+      {!isStreaming && citations.length > 0 && <Sources sources={citations} />}
 
       {!isStreaming && <Meta message={message} />}
     </article>

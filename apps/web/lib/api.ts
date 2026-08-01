@@ -3,6 +3,7 @@ import type {
   Conversation,
   ConversationDetail,
   ModelInfo,
+  ResearchMode,
   StreamEvent,
 } from "./types";
 
@@ -105,6 +106,7 @@ export async function* streamChat(
     content: string;
     model_id?: string;
     mode?: ChatMode;
+    research?: ResearchMode;
     images?: { data_url: string }[];
   },
   signal: AbortSignal,
